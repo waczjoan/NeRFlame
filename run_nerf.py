@@ -245,20 +245,23 @@ def create_nerf(args):
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs,
+                 basedir=args.basedir, expname=args.expname).to(device)
     grad_vars = list(model.parameters())
 
     model_fine = None
     if args.N_importance > 0:
         model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs,
+                          basedir=args.basedir, expname=args.expname).to(device)
         grad_vars += list(model_fine.parameters())
 
-    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(inputs, viewdirs, network_fn,
-                                                                        embed_fn=embed_fn,
-                                                                        embeddirs_fn=embeddirs_fn,
-                                                                        netchunk=args.netchunk)
+    network_query_fn = lambda inputs, viewdirs, network_fn: run_network(
+        inputs, viewdirs, network_fn,
+        embed_fn=embed_fn,
+        embeddirs_fn=embeddirs_fn,
+        netchunk=args.netchunk)
 
     # Create optimizer
     optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
@@ -316,7 +319,7 @@ def create_nerf(args):
     render_kwargs_test['perturb'] = 1.
     render_kwargs_test['raw_noise_std'] = 0.
 
-    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
+    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model
 
 
 def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
@@ -488,6 +491,13 @@ def distance_calculator(set_of_coordinates, mesh_points):
 def FLAME_based_alpha_calculator_v_relu(distances, m, e):
     min_d, _ = torch.min(distances, 2)
     alpha = 1 - ((m(min_d) / e) - (m(min_d - e) / e))
+    return alpha
+
+
+def FLAME_based_alpha_calculator_original(
+        distances_f, epsilon, alpha_original
+):
+    alpha = torch.where(distances_f < epsilon, alpha_original, 0.)
     return alpha
 
 
@@ -718,12 +728,7 @@ def render_rays(f_vert,
 
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
-    m = torch.nn.ReLU()
-
     distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
-
-    alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
-    fake_alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, fake_epsilon)
 
     if offset is not None:
         pts += offset
@@ -734,10 +739,27 @@ def render_rays(f_vert,
 
     # raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
-                                                                               white_bkgd,
-                                                                               pytest=pytest, alpha_overide=alpha,
-                                                                               fake_alpha=fake_alpha)
+    alpha_original = raw[:, :, -1]
+    # min_alpha_original = alpha_original.min()
+    # max_alpha_original = alpha_original.max()
+
+    alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
+    # a = alpha.sum()
+    fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, alpha_original)
+
+    # m = torch.nn.ReLU()
+    # alpha_wojtka = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
+    # min_distances_f = distances_f.min()
+    # b = alpha_wojtka.abs().sum()
+    # max_alpha_wojtka = alpha_wojtka.max()
+    # min_alpha_wojtka = alpha_wojtka.min()
+
+    rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
+        raw, z_vals, rays_d, raw_noise_std,
+       white_bkgd,
+       pytest=pytest, alpha_overide=alpha,
+       fake_alpha=fake_alpha
+    )
 
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
@@ -751,7 +773,6 @@ def render_rays(f_vert,
                                                             None]  # [N_rays, N_samples + N_importance, 3]
 
         distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
-        alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
 
         run_fn = network_fn if network_fine is None else network_fine
 
@@ -764,6 +785,9 @@ def render_rays(f_vert,
 
         # raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
+
+        alpha_original = raw[:, :, -1]
+        alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
 
         rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
                                                                                    white_bkgd,
@@ -1091,11 +1115,11 @@ def train():
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 2.
-        far = 6.
+        near = 8.
+        far = 26.
 
-        # near = 3.
-        # far = 5.5
+        # near = 2.
+        # far = 6.
 
         if args.white_bkgd:
             images = images[..., :3] * images[..., -1:] + (1. - images[..., -1:])
@@ -1206,7 +1230,7 @@ def train():
     vertice = torch.squeeze(vertice)
     vertice = vertice.cuda()
 
-    vertice *= 8
+    vertice *= 23
 
     faces = flamelayer.faces
     faces = torch.tensor(faces.astype(np.int32))
@@ -1214,7 +1238,7 @@ def train():
     faces = faces.cuda()
 
     # Create nerf model
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model = create_nerf(args)
     global_step = start
 
     bds_dict = {
@@ -1278,8 +1302,6 @@ def train():
     print('TEST views are', i_test)
     print('VAL views are', i_val)
 
-    # Summary writers
-    # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
     start = start + 1
     for i in trange(start, N_iters):
@@ -1340,7 +1362,7 @@ def train():
         vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
         vertice = torch.squeeze(vertice)
 
-        vertice *= 8
+        vertice *= 23
 
         rgb_f, disp_f, acc_f, extras_f = render(vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,
                                                 verbose=i < 10, retraw=True, offset=f_trans,
@@ -1358,6 +1380,11 @@ def train():
 
         loss = loss_f
         psnr = psnr_f
+
+        model.log_on_tensorboard(i, {
+            'loss': loss_f,
+            'psnr': psnr
+        })
 
         loss.backward()
 

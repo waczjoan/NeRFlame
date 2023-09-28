@@ -3,6 +3,7 @@ import torch
 # torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 
 # Misc
 img2mse = lambda x, y: torch.mean((x - y) ** 2)
@@ -66,7 +67,10 @@ def get_embedder(multires, i=0):
 
 # Model
 class NeRF(nn.Module):
-    def __init__(self, D=8, W=256, input_ch=3, input_ch_views=3, output_ch=4, skips=[4], use_viewdirs=False):
+    def __init__(self, D=8, W=256, input_ch=3,
+         input_ch_views=3, output_ch=4, skips=[4],
+         use_viewdirs=False, basedir='.logs', expname='experiment'
+    ):
         """ 
         """
         super(NeRF, self).__init__()
@@ -76,6 +80,8 @@ class NeRF(nn.Module):
         self.input_ch_views = input_ch_views
         self.skips = skips
         self.use_viewdirs = use_viewdirs
+        self.basedir = basedir
+        self.expname = expname
 
         self.pts_linears = nn.ModuleList(
             [nn.Linear(input_ch, W)] + [nn.Linear(W, W) if i not in self.skips else nn.Linear(W + input_ch, W) for i in
@@ -93,6 +99,15 @@ class NeRF(nn.Module):
             self.rgb_linear = nn.Linear(W // 2, 3)
         else:
             self.output_linear = nn.Linear(W, output_ch)
+
+        self.writer = SummaryWriter(
+            log_dir=f'{self.basedir}/metrics/{self.expname}'
+        )
+
+    def log_on_tensorboard(self, step, metrics):
+        for i in metrics:
+            self.writer.add_scalar(f"{i}", metrics[i], step)
+        self.writer.flush()
 
     def forward(self, x):
         input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)

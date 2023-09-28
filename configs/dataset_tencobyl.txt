@@ -1,4 +1,4 @@
-expname = dataset_tencobyl
+expname = dataset_tencobyl_epslion_0_025
 
 basedir = logs
 datadir = data/dataset_tencobyl
