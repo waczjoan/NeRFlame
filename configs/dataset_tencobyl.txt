@@ -1,0 +1,42 @@
+expname = dataset_tencobyl
+
+basedir = logs
+datadir = data/dataset_tencobyl
+dataset_type = blender
+
+no_batching = False
+white_bkgd = True
+half_res = True
+
+N_rand = 1024
+N_samples = 140
+N_importance = 140
+
+lrate=0.001
+lrate_decay=750
+
+epsilon=0.025
+fake_epsilon=0.06
+
+factor = 8
+llffhold = 8
+
+perturb=1
+netdepth=8
+netdepth_fine=8
+netwidth=256
+netwidth_fine=256
+
+use_viewdirs = False
+
+render_only=False
+render_test=False
+render_factor=0
+
+chunk=16384
+chunk_render=16384
+
+i_embed=0
+
+i_video=5000
+i_testset=5000

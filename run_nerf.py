@@ -241,7 +241,7 @@ def create_nerf(args):
     if args.use_viewdirs:
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     # output_ch = 5 if args.N_importance > 0 else 4
-    output_ch = 3
+    output_ch = 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -1206,8 +1206,6 @@ def train():
     vertice = torch.squeeze(vertice)
     vertice = vertice.cuda()
 
-    vertice = vertice[:, [0, 2, 1]]
-    vertice[:, 1] = -vertice[:, 1]
     vertice *= 8
 
     faces = flamelayer.faces
@@ -1342,8 +1340,6 @@ def train():
         vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
         vertice = torch.squeeze(vertice)
 
-        vertice = vertice[:, [0, 2, 1]]
-        vertice[:, 1] = -vertice[:, 1]
         vertice *= 8
 
         rgb_f, disp_f, acc_f, extras_f = render(vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,

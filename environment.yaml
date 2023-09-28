@@ -1,0 +1,39 @@
+name: nerflame-gan
+channels:
+  - pytorch
+  - nvidia
+  - fvcore
+  - iopath
+  - conda-forge
+  - pytorch3d
+  - defaults
+dependencies:
+  - python=3.9.17
+  - pip=23.2.1
+  - pytorch=1.13.0
+  - torchvision=0.14.0
+  - pytorch-cuda=11.7
+  - imageio
+  - imageio-ffmpeg
+  - protobuf=3.20.1
+  - fvcore
+  - iopath
+  - pytorch3d
+  - pip:
+    - hydra-core==1.0.6
+    - click==7.1.2
+    - scipy==1.6.1
+    - ninja==1.10.0
+    - tensorboard==2.13.0
+    - tqdm==4.59.0
+    - gitpython
+    - gpustat
+    - opencv-python
+    - pyrender==0.1.39
+    - trimesh==3.6.18
+    - smplx
+    - matplotlib
+    - configargparse
+    - tqdm
+    - git+https://github.com/mattloper/chumpy
+    - -e .
