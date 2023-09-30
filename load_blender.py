@@ -29,7 +29,7 @@ def pose_spherical(theta, phi, radius):
     c2w = trans_t(radius)
     c2w = rot_phi(phi / 180. * np.pi) @ c2w
     c2w = rot_theta(theta / 180. * np.pi) @ c2w
-    c2w = torch.Tensor(np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])) @ c2w
+    #c2w = torch.Tensor(np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])) @ c2w
     return c2w
 
 
@@ -54,7 +54,7 @@ def load_blender_data(basedir, half_res=False, testskip=1):
 
         for frame in meta['frames'][::skip]:
             fname = os.path.join(basedir, frame['file_path'] + '.png')
-            imgs.append(imageio.imread(fname))
+            imgs.append(cv2.resize(imageio.imread(fname), (800, 800)))
             poses.append(np.array(frame['transform_matrix']))
         imgs = (np.array(imgs) / 255.).astype(np.float32)  # keep all 4 channels (RGBA)
         poses = np.array(poses).astype(np.float32)
@@ -73,7 +73,7 @@ def load_blender_data(basedir, half_res=False, testskip=1):
 
     # render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
     # render_poses = torch.stack([pose_spherical(angle, 0.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
-    render_poses = torch.stack([pose_spherical(angle, -10.0, 4.0) for angle in np.linspace(-180, 180, 40 + 1)[:-1]], 0)
+    render_poses = torch.stack([pose_spherical(angle, -10.0, 16.0) for angle in np.linspace(-180, 180, 40 + 1)[:-1]], 0)
 
     if half_res:
         H = H // 2
