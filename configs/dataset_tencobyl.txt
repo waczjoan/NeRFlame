@@ -1,4 +1,4 @@
-expname = dataset_tencobyl_epslion_0_025
+expname = dataset_tencobyl_radius_16_epsilion_20000_fake_epsilion_20000_resize_800_alfa_cal_in_raw2outputs
 
 basedir = logs
 datadir = data/dataset_tencobyl
@@ -15,8 +15,8 @@ N_importance = 140
 lrate=0.001
 lrate_decay=750
 
-epsilon=0.025
-fake_epsilon=0.06
+epsilon=20000
+fake_epsilon=20000
 
 factor = 8
 llffhold = 8

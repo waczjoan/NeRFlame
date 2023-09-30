@@ -322,7 +322,7 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
+def raw2outputs(raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
                 fake_alpha=None):
     """Transforms model's predictions to semantically meaningful values.
     Args:
@@ -357,13 +357,16 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
+    _alpha = raw2alpha(raw[..., 3] + noise, dists)
     if alpha_overide is None:
-        alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-    else:
-        alpha = alpha_overide
+        alpha = _alpha  # [N_rays, N_samples]
+    else:  # [N_rays, N_samples]
+        alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, _alpha)
 
     if fake_alpha is None:
         fake_alpha = alpha
+    else:
+        fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, _alpha)
 
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:, :-1]
@@ -739,13 +742,13 @@ def render_rays(f_vert,
 
     # raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    alpha_original = raw[:, :, -1]
+    # alpha_original = raw[:, :, -1]
     # min_alpha_original = alpha_original.min()
     # max_alpha_original = alpha_original.max()
 
-    alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
+    # alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
     # a = alpha.sum()
-    fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, alpha_original)
+    # fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, alpha_original)
 
     # m = torch.nn.ReLU()
     # alpha_wojtka = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
@@ -755,10 +758,10 @@ def render_rays(f_vert,
     # min_alpha_wojtka = alpha_wojtka.min()
 
     rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
-        raw, z_vals, rays_d, raw_noise_std,
+    raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
        white_bkgd,
-       pytest=pytest, alpha_overide=alpha,
-       fake_alpha=fake_alpha
+       pytest=pytest, alpha_overide=True,
+       fake_alpha=True
     )
 
     if N_importance > 0:
@@ -786,12 +789,10 @@ def render_rays(f_vert,
         # raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        alpha_original = raw[:, :, -1]
-        alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
-
-        rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
-                                                                                   white_bkgd,
-                                                                                   pytest=pytest, alpha_overide=alpha)
+        rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
+            raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
+           white_bkgd,
+           pytest=pytest, alpha_overide=True)
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
     if retraw:
@@ -921,6 +922,8 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video", type=int, default=50000,
                         help='frequency of render_poses video saving')
+    parser.add_argument("--generate_video", type=bool, default=False,
+                        help='decision if generate_video')
 
     parser.add_argument("--epsilon", type=float, default=0.04)
     parser.add_argument("--fake_epsilon", type=float, default=0.06)
@@ -1457,15 +1460,16 @@ def train():
             print('Saved test set')
 
         torch.cuda.empty_cache()
-        if i % args.i_video == 0 and i > 0:
-            # Turn on testing mode
-            with torch.no_grad():
-                rgbs, disps = render_path(vertice, faces, render_poses, hwf, K, args.chunk_render,
-                                          render_kwargs_test, offset=f_trans)
-            print('Done, saving', rgbs.shape, disps.shape)
-            moviebase = os.path.join(basedir, expname, '{}_spiral_f_{:06d}_'.format(expname, i))
-            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
-            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+        if args.generate_video:
+            if i % args.i_video == 0 and i > 0:
+                # Turn on testing mode
+                with torch.no_grad():
+                    rgbs, disps = render_path(vertice, faces, render_poses, hwf, K, args.chunk_render,
+                                              render_kwargs_test, offset=f_trans)
+                print('Done, saving', rgbs.shape, disps.shape)
+                moviebase = os.path.join(basedir, expname, '{}_spiral_f_{:06d}_'.format(expname, i))
+                imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+                imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
         torch.cuda.empty_cache()
 
         if i % args.i_print == 0:
