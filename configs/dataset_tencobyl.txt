@@ -1,4 +1,4 @@
-expname = dataset_tencobyl_radius_16_epsilion_20000_fake_epsilion_20000_resize_800_alfa_cal_in_raw2outputs
+expname = points_on_mesh
 
 basedir = logs
 datadir = data/dataset_tencobyl
@@ -10,12 +10,12 @@ half_res = True
 
 N_rand = 1024
 N_samples = 140
-N_importance = 140
+N_importance = 20
 
 lrate=0.001
 lrate_decay=750
 
-epsilon=20000
+epsilon=0.05
 fake_epsilon=20000
 
 factor = 8

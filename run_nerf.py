@@ -3,6 +3,7 @@ import sys
 import time
 
 import imageio
+import torch
 from torch.autograd.function import once_differentiable
 from tqdm import tqdm, trange
 
@@ -11,6 +12,11 @@ from load_blender import load_blender_data
 from load_deepvoxels import load_dv_data
 from load_llff import load_llff_data
 from run_nerf_helpers import *
+from mesh_utils import (
+    intersection_points_on_mesh,
+    sample_extra_points_on_mesh,
+    transform_points_to_single_number_representation
+)
 
 sys.path.append('./FLAME/')
 from FLAME import FLAME
@@ -322,8 +328,15 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model
 
 
-def raw2outputs(raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
-                fake_alpha=None):
+def raw2outputs(
+    raw,
+    z_vals,
+    rays_d,
+    raw_noise_std=0.0,
+    white_bkgd=False,
+    pytest=False,
+    ray_idxs_intersection_mash = []
+):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
@@ -338,18 +351,10 @@ def raw2outputs(raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noi
     """
     raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
-    dists = z_vals[..., 1:] - z_vals[..., :-1]
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
-
-    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
-
     rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
     noise = 0.
     if raw_noise_std > 0.:
-        if alpha_overide is None:
-            noise = torch.randn(raw[..., 3].shape) * raw_noise_std
-        else:
-            noise = torch.randn(alpha_overide.shape) * raw_noise_std
+        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
 
         # Overwrite randomly sampled data if pytest
         if pytest:
@@ -357,32 +362,38 @@ def raw2outputs(raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noi
             noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
-    _alpha = raw2alpha(raw[..., 3] + noise, dists)
-    if alpha_overide is None:
-        alpha = _alpha  # [N_rays, N_samples]
-    else:  # [N_rays, N_samples]
-        alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, _alpha)
+    if raw.shape[1] != 1:
+        dists = z_vals[..., 1:] - z_vals[..., :-1]
+        dists = torch.cat(
+            [dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1
+        )  # [N_rays, N_samples]
 
-    if fake_alpha is None:
-        fake_alpha = alpha
+        dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
+        alpha = raw2alpha(raw[..., 3] + noise, dists)
+
     else:
-        fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, _alpha)
+        alpha = torch.zeros(raw.shape[0], 1)
+        alpha[ray_idxs_intersection_mash] = 1
 
-    # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:, :-1]
-    fake_weights = fake_alpha * torch.cumprod(
-        torch.cat([torch.ones((fake_alpha.shape[0], 1)), 1. - fake_alpha + 1e-10], -1),
-        -1)[:, :-1]
+    aa = alpha.max()
+    weights = alpha * torch.cumprod(
+        torch.cat([torch.ones(
+            (alpha.shape[0], 1)
+        ), 1. - alpha + 1e-10], -1), -1
+    )[:, :-1]
+
+
     rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
 
     depth_map = torch.sum(weights * z_vals, -1)
     disp_map = 1. / torch.max(1e-10 * torch.ones_like(depth_map), depth_map / torch.sum(weights, -1))
+    disp_map = torch.nan_to_num(disp_map, 0)
     acc_map = torch.sum(weights, -1)
 
     if white_bkgd:
         rgb_map = rgb_map + (1. - acc_map[..., None])
 
-    return rgb_map, disp_map, acc_map, weights, fake_weights, depth_map
+    return rgb_map, disp_map, acc_map, weights, depth_map
 
 
 # PointFaceDistance
@@ -702,97 +713,66 @@ def render_rays(f_vert,
     N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
-    bounds = torch.reshape(ray_batch[..., 6:8], [-1, 1, 2])
-    near, far = bounds[..., 0], bounds[..., 1]  # [-1,1]
 
-    t_vals = torch.linspace(0., 1., steps=N_samples)
-    if not lindisp:
-        z_vals = near * (1. - t_vals) + far * (t_vals)
-    else:
-        z_vals = 1. / (1. / near * (1. - t_vals) + 1. / far * (t_vals))
+    ray_idxs_intersection_mash, pts = intersection_points_on_mesh(
+        faces=f_faces,
+        vertices=f_vert,
+        rays_o=rays_o,
+        rays_d=rays_d,
+    )
 
-    z_vals = z_vals.expand([N_rays, N_samples])
+    pts = pts.unsqueeze(0).swapaxes(0, 1)
 
-    if perturb > 0.:
-        # get intervals between samples
-        mids = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
-        upper = torch.cat([mids, z_vals[..., -1:]], -1)
-        lower = torch.cat([z_vals[..., :1], mids], -1)
-        # stratified samples in those intervals
-        t_rand = torch.rand(z_vals.shape)
+    z_vals = transform_points_to_single_number_representation(
+        ray_directions=rays_d,
+        ray_origin=rays_o,
+        points=pts
+    )
 
-        # Pytest, overwrite u with numpy's fixed random numbers
-        if pytest:
-            np.random.seed(0)
-            t_rand = np.random.rand(*list(z_vals.shape))
-            t_rand = torch.Tensor(t_rand)
+    z_vals, _ = torch.sort(z_vals, -1)
 
-        z_vals = lower + (upper - lower) * t_rand
-
-    pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
-
-    distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
-
-    if offset is not None:
-        pts += offset
-
-    if trans_mat is not None:
-        trans_mat_organ = trans_mat[idx_f, :]
-        pts = transform_pt(pts, trans_mat_organ)
-
-    # raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    # alpha_original = raw[:, :, -1]
-    # min_alpha_original = alpha_original.min()
-    # max_alpha_original = alpha_original.max()
 
-    # alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
-    # a = alpha.sum()
-    # fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, alpha_original)
-
-    # m = torch.nn.ReLU()
-    # alpha_wojtka = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
-    # min_distances_f = distances_f.min()
-    # b = alpha_wojtka.abs().sum()
-    # max_alpha_wojtka = alpha_wojtka.max()
-    # min_alpha_wojtka = alpha_wojtka.min()
-
-    rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
-    raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
-       white_bkgd,
-       pytest=pytest, alpha_overide=True,
-       fake_alpha=True
+    rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+        raw=raw,
+        z_vals=z_vals,
+        rays_d=rays_d,
+        raw_noise_std=raw_noise_std,
+        white_bkgd=white_bkgd,
+        pytest=pytest,
+        ray_idxs_intersection_mash=ray_idxs_intersection_mash
     )
 
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
-        z_vals_mid = .5 * (z_vals[..., 1:] + z_vals[..., :-1])
-        z_samples = sample_pdf(z_vals_mid, fake_weights[..., 1:-1], N_importance, det=(perturb == 0.), pytest=pytest)
-        z_samples = z_samples.detach()
+        extra_pts = sample_extra_points_on_mesh(
+            points=pts.squeeze(dim=1),
+            ray_directions=rays_d,
+            n_points=N_importance,
+            eps=epsilon,
+        )
 
-        z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
-        pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :,
-                                                            None]  # [N_rays, N_samples + N_importance, 3]
+        z_vals = transform_points_to_single_number_representation(
+            ray_directions=rays_d,
+            ray_origin=rays_o,
+            points=extra_pts
+        )
 
-        distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
+        z_vals, _ = torch.sort(z_vals, -1)
 
         run_fn = network_fn if network_fine is None else network_fine
 
-        if offset is not None:
-            pts += offset
+        raw = network_query_fn(extra_pts, viewdirs, run_fn)
 
-        if trans_mat is not None:
-            trans_mat_organ = trans_mat[idx_f, :]
-            pts = transform_pt(pts, trans_mat_organ)
-
-        # raw = run_network(pts, fn=run_fn)
-        raw = network_query_fn(pts, viewdirs, run_fn)
-
-        rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
-            raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
-           white_bkgd,
-           pytest=pytest, alpha_overide=True)
+        rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
+            raw=raw,
+            z_vals=z_vals,
+            rays_d=rays_d,
+            raw_noise_std=raw_noise_std,
+            white_bkgd=white_bkgd,
+            pytest=pytest,
+        )
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
     if retraw:
@@ -801,7 +781,7 @@ def render_rays(f_vert,
         ret['rgb0'] = rgb_map_0
         ret['disp0'] = disp_map_0
         ret['acc0'] = acc_map_0
-        ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
+        # ret['z_std'] = torch.std(z_samples, dim=-1, unbiased=False)  # [N_rays]
 
     for k in ret:
         if (torch.isnan(ret[k]).any() or torch.isinf(ret[k]).any()) and DEBUG:
