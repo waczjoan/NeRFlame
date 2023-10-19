@@ -1,4 +1,4 @@
-expname = points_on_mesh_without_detach_23
+expname = points_on_mesh_without_detach_23_v2
 
 basedir = logs
 datadir = data/dataset_tencobyl

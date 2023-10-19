@@ -3,6 +3,7 @@ from trimesh.base import Trimesh
 from trimesh.ray.ray_pyembree import RayMeshIntersector
 
 import torch
+torch.autograd.set_detect_anomaly(True)
 
 
 def _dot_product(Y, X, P, n_expanded):
@@ -26,18 +27,24 @@ def intersection_points_on_mesh(
     )
 
     ray_idxs = out['nearest_points_idx'][0]
-    pts = out['pts_nearest_each_ray']
+    pts = torch.nan_to_num(out['pts_nearest_each_ray'], 0)
+
+    torch.save(faces, 'faces.pt')
+    torch.save(vertices, 'vertices.pt')
+    torch.save(ray_origins, 'ray_origins.pt')
+    torch.save(ray_directions, 'ray_directions.pt')
+
 
     # can be done for checking:
 
-    # pts_on_mesh = out['pts']
+   # pts_on_mesh = out['pts']
 
-    # ray_idxs, face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
-    #    faces=faces,
-    #    vertices=vertices.clone(),
-    #    rays_o=ray_origins.clone(),
-    #    rays_d=ray_directions.clone(),
-    # )
+   # ray_idxs, face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
+   #     faces=faces,
+   #     vertices=vertices.clone(),
+   #     ray_origins=ray_origins.clone(),
+   #     ray_directions=ray_directions.clone(),
+   # )
 
     # pts = torch.zeros(ray_origins.shape[0], 3)
     # aa = pts_on_mesh[ray_idxs, face_idxs]

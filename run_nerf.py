@@ -32,6 +32,7 @@ from torch.distributions import Normal
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
 DEBUG = False
+torch.autograd.set_detect_anomaly(True)
 
 
 def batchify(fn, chunk):
@@ -721,7 +722,7 @@ def render_rays(f_vert,
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
 
-    ray_idxs_intersection_mash,  _, pts = intersection_points_on_mesh_trimesh_obj(
+    ray_idxs_intersection_mash,  pts = intersection_points_on_mesh(
         faces=f_faces,
         vertices=f_vert,
         ray_origins=rays_o,
@@ -1295,6 +1296,10 @@ def train():
 
     start = start + 1
     for i in trange(start, N_iters):
+        if i == 7:
+            do = 1
+        if i > 7:
+            do = 0
         time0 = time.time()
 
         # Sample random ray batch
