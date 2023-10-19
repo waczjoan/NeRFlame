@@ -15,7 +15,7 @@ N_importance = 0
 lrate=0.001
 lrate_decay=750
 
-epsilon=0.003
+epsilon=0.005
 fake_epsilon=20000
 
 factor = 8

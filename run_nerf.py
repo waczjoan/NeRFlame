@@ -63,12 +63,12 @@ def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024 * 64
     return outputs
 
 
-def batchify_rays(f_vert, f_faces, rays_flat, chunk=1024 * 32, offset=None, **kwargs):
+def batchify_rays(f_vert, f_faces, rays_flat, chunk=1024 * 32, offset=None, use_viewdirs=False, **kwargs):
     """Render rays in smaller minibatches to avoid OOM.
     """
     all_ret = {}
     for i in range(0, rays_flat.shape[0], chunk):
-        ret = render_rays(f_vert, f_faces, rays_flat[i:i + chunk], offset=offset, **kwargs)
+        ret = render_rays(f_vert, f_faces, rays_flat[i:i + chunk], offset=offset, use_viewdirs=use_viewdirs, **kwargs)
         torch.cuda.empty_cache()
         for k in ret:
             if k not in all_ret:
@@ -136,7 +136,7 @@ def render(f_vert, f_faces, H, W, K, chunk=1024 * 32, rays=None, c2w=None, ndc=T
         rays = torch.cat([rays, viewdirs], -1)
 
     # Render and reshape
-    all_ret = batchify_rays(f_vert, f_faces, rays, chunk, offset=offset, **kwargs)
+    all_ret = batchify_rays(f_vert, f_faces, rays, chunk, offset=offset, use_viewdirs=use_viewdirs, **kwargs)
     for k in all_ret:
         k_sh = list(sh[:-1]) + list(all_ret[k].shape[1:])
         all_ret[k] = torch.reshape(all_ret[k], k_sh)
@@ -336,7 +336,8 @@ def raw2outputs(
     raw_noise_std=0.0,
     white_bkgd=False,
     pytest=False,
-    ray_idxs_intersection_mash = []
+    ray_idxs_intersection_mash = [],
+    use_viewdirs=False
 ):
     """Transforms model's predictions to semantically meaningful values.
     Args:
@@ -354,27 +355,31 @@ def raw2outputs(
 
     rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
     noise = 0.
-    if raw_noise_std > 0.:
-        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
 
-        # Overwrite randomly sampled data if pytest
-        if pytest:
-            np.random.seed(0)
-            noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
-            noise = torch.Tensor(noise)
-
-    if raw.shape[1] != 1:
-        dists = z_vals[..., 1:] - z_vals[..., :-1]
-        dists = torch.cat(
-            [dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1
-        )  # [N_rays, N_samples]
-
-        dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
-        alpha = raw2alpha(raw[..., 3] + noise, dists)
-
+    if use_viewdirs:
+        alpha = raw[..., -1]
     else:
-        alpha = torch.zeros(raw.shape[0], 1)
-        alpha[ray_idxs_intersection_mash] = 1
+        if raw_noise_std > 0.:
+            noise = torch.randn(raw[..., 3].shape) * raw_noise_std
+
+            # Overwrite randomly sampled data if pytest
+            if pytest:
+                np.random.seed(0)
+                noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
+                noise = torch.Tensor(noise)
+
+        if raw.shape[1] != 1:
+            dists = z_vals[..., 1:] - z_vals[..., :-1]
+            dists = torch.cat(
+                [dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1
+            )  # [N_rays, N_samples]
+
+            dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
+            alpha = raw2alpha(raw[..., 3] + noise, dists)
+
+        else:
+            alpha = torch.zeros(raw.shape[0], 1) + 1e-10
+            alpha[ray_idxs_intersection_mash] = 1
 
     aa = alpha.max()
     weights = alpha * torch.cumprod(
@@ -680,7 +685,8 @@ def render_rays(f_vert,
                 epsilon=0.04,
                 fake_epsilon=0.06,
                 trans_mat=None,
-                offset=None):
+                offset=None,
+                use_viewdirs=False):
     """Volumetric rendering.
     Args:
       ray_batch: array of shape [batch_size, ...]. All information necessary
@@ -715,7 +721,7 @@ def render_rays(f_vert,
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
 
-    ray_idxs_intersection_mash,  pts = intersection_points_on_mesh(
+    ray_idxs_intersection_mash,  _, pts = intersection_points_on_mesh_trimesh_obj(
         faces=f_faces,
         vertices=f_vert,
         ray_origins=rays_o,
@@ -739,7 +745,8 @@ def render_rays(f_vert,
         raw_noise_std=raw_noise_std,
         white_bkgd=white_bkgd,
         pytest=pytest,
-        ray_idxs_intersection_mash=ray_idxs_intersection_mash
+        ray_idxs_intersection_mash=ray_idxs_intersection_mash,
+        use_viewdirs=use_viewdirs
     )
 
     if N_importance > 0:
@@ -771,6 +778,7 @@ def render_rays(f_vert,
             raw_noise_std=raw_noise_std,
             white_bkgd=white_bkgd,
             pytest=pytest,
+            use_viewdirs=use_viewdirs
         )
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
@@ -1173,7 +1181,7 @@ def train():
     f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(device))
     f_trans = nn.Parameter(torch.zeros(1, 3).float().to(device))
 
-    f_lr = 0.001
+    f_lr = 0
     f_wd = 0.0001
     f_opt = torch.optim.Adam(
         params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],
