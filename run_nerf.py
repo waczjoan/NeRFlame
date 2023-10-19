@@ -15,7 +15,8 @@ from run_nerf_helpers import *
 from mesh_utils import (
     intersection_points_on_mesh,
     sample_extra_points_on_mesh,
-    transform_points_to_single_number_representation
+    transform_points_to_single_number_representation,
+    intersection_points_on_mesh_trimesh_obj
 )
 
 sys.path.append('./FLAME/')
@@ -714,14 +715,12 @@ def render_rays(f_vert,
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
 
-    ray_idxs_intersection_mash, pts = intersection_points_on_mesh(
+    ray_idxs_intersection_mash,  pts = intersection_points_on_mesh(
         faces=f_faces,
         vertices=f_vert,
-        rays_o=rays_o,
-        rays_d=rays_d,
+        ray_origins=rays_o,
+        ray_directions=rays_d,
     )
-
-    pts = pts.unsqueeze(0).swapaxes(0, 1)
 
     z_vals = transform_points_to_single_number_representation(
         ray_directions=rays_d,
@@ -1351,6 +1350,7 @@ def train():
                                                 verbose=i < 10, retraw=True, offset=f_trans,
                                                 **render_kwargs_train)
 
+        aaa = rgb_f.all()
         img_loss_f = img2mse(rgb_f, target_s)
         trans_f = extras_f['raw'][..., -1]
         loss_f = img_loss_f

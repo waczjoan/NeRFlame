@@ -1,4 +1,4 @@
-expname = face_M1000_N
+expname = face_M1000_N_points_on_mesh
 basedir = ./logs
 datadir = data/face_M1000_N
 dataset_type = blender
@@ -17,7 +17,7 @@ N_importance = 140
 lrate=0.001
 lrate_decay=750
 
-epsilon=0.016
+epsilon=0.005
 fake_epsilon=0.04
 
 perturb=1
