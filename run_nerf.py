@@ -379,7 +379,7 @@ def raw2outputs(
             alpha = raw2alpha(raw[..., 3] + noise, dists)
 
         else:
-            alpha = torch.zeros(raw.shape[0], 1) + 1e-10
+            alpha = torch.zeros(raw.shape[0], 1)
             alpha[ray_idxs_intersection_mash] = 1
 
     aa = alpha.max()
@@ -1182,7 +1182,7 @@ def train():
     f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(device))
     f_trans = nn.Parameter(torch.zeros(1, 3).float().to(device))
 
-    f_lr = 0
+    f_lr = 0.0001
     f_wd = 0.0001
     f_opt = torch.optim.Adam(
         params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],

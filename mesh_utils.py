@@ -1,4 +1,3 @@
-import torch
 from trimesh.base import Trimesh
 from trimesh.ray.ray_pyembree import RayMeshIntersector
 
@@ -18,40 +17,40 @@ def intersection_points_on_mesh(
     faces,
     vertices
 ):
-    triangle_vertices = vertices[faces.long()]  # [9976, 3, 3]
+    """
+        Find the intersection points between rays and a 3D mesh.
+
+        Args:
+            ray_origins (torch.Tensor):
+                The origins of the rays as a tensor of shape (N, 3),
+                where N is the number of rays.
+            ray_directions (torch.Tensor):
+                The directions of the rays as a tensor of shape (N, 3).
+            faces (torch.Tensor):
+                The faces of the 3D mesh as a tensor of shape (M, 3),
+                where M is the number of faces.
+            vertices (torch.Tensor):
+                The vertices of the 3D mesh as a tensor of shape (K, 3),
+                where K is the number of vertices.
+
+        Returns:
+            ray_idxs (torch.Tensor):
+                A tensor containing the indices of the rays,
+                for which there is any intersection point.
+            pts (torch.Tensor):
+                A tensor containing the intersection points
+                for each ray, reshaped to (3, N).
+    """
     out = rays_triangles_intersection(
         ray_origins=ray_origins,
         ray_directions=ray_directions,
-        triangle_vertices=triangle_vertices,
-        return_nearest_points=False
+        triangle_vertices=vertices[faces.long()],
     )
 
-    ray_idxs = out['nearest_points_idx'][0]
-    pts = torch.nan_to_num(out['pts_nearest_each_ray'], 0)
+    intersection_pts = out['pts_nearest_each_ray']
+    pts = intersection_pts.unsqueeze(0).swapaxes(0, 1)
 
-    torch.save(faces, 'faces.pt')
-    torch.save(vertices, 'vertices.pt')
-    torch.save(ray_origins, 'ray_origins.pt')
-    torch.save(ray_directions, 'ray_directions.pt')
-
-
-    # can be done for checking:
-
-   # pts_on_mesh = out['pts']
-
-   # ray_idxs, face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
-   #     faces=faces,
-   #     vertices=vertices.clone(),
-   #     ray_origins=ray_origins.clone(),
-   #     ray_directions=ray_directions.clone(),
-   # )
-
-    # pts = torch.zeros(ray_origins.shape[0], 3)
-    # aa = pts_on_mesh[ray_idxs, face_idxs]
-    # pts[ray_idxs] = aa
-
-    pts = pts.unsqueeze(0).swapaxes(0, 1)
-
+    ray_idxs = out["nearest_points_idx"][0]
     return ray_idxs, pts
 
 
@@ -59,7 +58,6 @@ def rays_triangles_intersection(
     ray_origins,
     ray_directions,
     triangle_vertices,
-    return_nearest_points: True
 ):
     num_rays = ray_origins.shape[0]
     num_triangles = triangle_vertices.shape[0]
@@ -99,12 +97,17 @@ def rays_triangles_intersection(
     # Finding parameter t
     t = -((n_expanded * ray_origins_expanded).sum(dim=-1) + d)
     tt = (n_expanded * ray_directions_norm_expanded).sum(dim=-1)
-    t /= tt
+
+    _tt = torch.where(tt == 0, 0.0005, tt)
+
+    t /= _tt
 
     # Finding P [num_rays, num_triangles, 3D point]
     pts = ray_origins_expanded + t.view(
         num_rays, num_triangles, 1
     ) * ray_directions_norm_expanded
+
+    # pts[pts == float("Inf")] = 0
 
     # Get the resulting vector for each vertex
     # following the construction order
@@ -115,9 +118,6 @@ def rays_triangles_intersection(
     backface_intersection = torch.where(t < 0, 0, 1)
 
     valid_point = (Pa > 0) & (Pb > 0) & (Pc > 0)  # [num_rays, num_triangles]
-
-    # out = torch.stack([Pa, Pb, Pc], dim = 2).min(axis=2).values # [num_rays, num_triangles]
-    # valid_point = out > 0 # [num_rays, num_triangles]
 
     _d = pts - ray_origins_expanded
     _d = (_d**2).sum(dim=2)
