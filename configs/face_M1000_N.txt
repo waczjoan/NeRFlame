@@ -1,4 +1,4 @@
-expname = face_M1000_N_points_on_mesh
+expname = face_M1000_N_points_on_mesh__f_lr_0_000001__lrate_0_001__N_rand_1024
 basedir = ./logs
 datadir = data/face_M1000_N
 dataset_type = blender
@@ -11,14 +11,15 @@ factor = 8
 llffhold = 8
 
 N_rand = 1024
-N_samples = 140
-N_importance = 140
+near = 2.
+far = 6.
+radius = 4.
+vertice_size = 8.
+f_lr = 0.000001
+
 
 lrate=0.001
 lrate_decay=750
-
-epsilon=0.005
-fake_epsilon=0.04
 
 perturb=1
 netdepth=8

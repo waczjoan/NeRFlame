@@ -3,8 +3,6 @@ import sys
 import time
 
 import imageio
-import torch
-from torch.autograd.function import once_differentiable
 from tqdm import tqdm, trange
 
 from load_LINEMOD import load_LINEMOD_data
@@ -21,12 +19,7 @@ from mesh_utils import (
 
 sys.path.append('./FLAME/')
 from FLAME import FLAME
-from pytorch3d import _C
-from pytorch3d.structures import Meshes, Pointclouds
-from torch.autograd import Function
-# import tensorflow as tf
-# import datetime
-from torch.distributions import Normal
+
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -314,7 +307,6 @@ def create_nerf(args):
         'white_bkgd': args.white_bkgd,
         'raw_noise_std': args.raw_noise_std,
         'epsilon': args.epsilon,
-        'fake_epsilon': args.fake_epsilon
     }
 
     # NDC only good for LLFF-style forward facing data
@@ -403,291 +395,22 @@ def raw2outputs(
     return rgb_map, disp_map, acc_map, weights, depth_map
 
 
-# PointFaceDistance
-
-_DEFAULT_MIN_TRIANGLE_AREA: float = 5e-4
-
-
-class _PointFaceDistance(Function):
-    """
-    Torch autograd Function wrapper PointFaceDistance Cuda implementation
-    """
-
-    @staticmethod
-    def forward(
-            ctx,
-            points,
-            points_first_idx,
-            tris,
-            tris_first_idx,
-            max_points,
-            min_triangle_area=_DEFAULT_MIN_TRIANGLE_AREA,
-    ):
-        """
-        Args:
-            ctx: Context object used to calculate gradients.
-            points: FloatTensor of shape `(P, 3)`
-            points_first_idx: LongTensor of shape `(N,)` indicating the first point
-                index in each example in the batch
-            tris: FloatTensor of shape `(T, 3, 3)` of triangular faces. The `t`-th
-                triangular face is spanned by `(tris[t, 0], tris[t, 1], tris[t, 2])`
-            tris_first_idx: LongTensor of shape `(N,)` indicating the first face
-                index in each example in the batch
-            max_points: Scalar equal to maximum number of points in the batch
-            min_triangle_area: (float, defaulted) Triangles of area less than this
-                will be treated as points/lines.
-        Returns:
-            dists: FloatTensor of shape `(P,)`, where `dists[p]` is the squared
-                euclidean distance of `p`-th point to the closest triangular face
-                in the corresponding example in the batch
-            idxs: LongTensor of shape `(P,)` indicating the closest triangular face
-                in the corresponding example in the batch.
-
-            `dists[p]` is
-            `d(points[p], tris[idxs[p], 0], tris[idxs[p], 1], tris[idxs[p], 2])`
-            where `d(u, v0, v1, v2)` is the distance of point `u` from the triangular
-            face `(v0, v1, v2)`
-
-        """
-        dists, idxs = _C.point_face_dist_forward(
-            points,
-            points_first_idx,
-            tris,
-            tris_first_idx,
-            max_points,
-            min_triangle_area,
-        )
-        ctx.save_for_backward(points, tris, idxs)
-        ctx.min_triangle_area = min_triangle_area
-        return dists, idxs
-
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, grad_dists, grad_idxs):
-        grad_dists = grad_dists.contiguous()
-        points, tris, idxs = ctx.saved_tensors
-        min_triangle_area = ctx.min_triangle_area
-        grad_points, grad_tris = _C.point_face_dist_backward(
-            points, tris, idxs, grad_dists, min_triangle_area
-        )
-        return grad_points, None, grad_tris, None, None, None
-
-
-point_face_distance = _PointFaceDistance.apply
-
-
-def point_mesh_face_distance(
-        meshes: Meshes,
-        pcls: Pointclouds,
-        min_triangle_area: float = _DEFAULT_MIN_TRIANGLE_AREA,
+def render_rays(
+    f_vert,
+    f_faces,
+    ray_batch,
+    network_fn,
+    network_query_fn,
+    retraw=False,
+    N_importance=0,
+    network_fine=None,
+    white_bkgd=False,
+    raw_noise_std=0.,
+    pytest=False,
+    epsilon=0.04,
+    use_viewdirs=False,
+    **kwargs
 ):
-    if len(meshes) != len(pcls):
-        raise ValueError("meshes and pointclouds must be equal sized batches")
-    N = len(meshes)
-
-    # packed representation for pointclouds
-    points = pcls.points_packed()  # (P, 3)
-    points_first_idx = pcls.cloud_to_packed_first_idx()
-    max_points = pcls.num_points_per_cloud().max().item()
-
-    # packed representation for faces
-    verts_packed = meshes.verts_packed()
-    faces_packed = meshes.faces_packed()
-    tris = verts_packed[faces_packed]  # (T, 3, 3)
-    tris_first_idx = meshes.mesh_to_faces_packed_first_idx()
-    max_tris = meshes.num_faces_per_mesh().max().item()
-
-    # point to face distance: shape (P,)
-    point_to_face, idx = point_face_distance(
-        points, points_first_idx, tris, tris_first_idx, max_points, min_triangle_area
-    )
-
-    return point_to_face, idx
-
-
-def distance_calculator(set_of_coordinates, mesh_points):
-    return torch.cdist(set_of_coordinates, mesh_points)
-
-
-def FLAME_based_alpha_calculator_v_relu(distances, m, e):
-    min_d, _ = torch.min(distances, 2)
-    alpha = 1 - ((m(min_d) / e) - (m(min_d - e) / e))
-    return alpha
-
-
-def FLAME_based_alpha_calculator_original(
-        distances_f, epsilon, alpha_original
-):
-    alpha = torch.where(distances_f < epsilon, alpha_original, 0.)
-    return alpha
-
-
-def sigma(x, epsilon):
-    # Create a Normal distribution with mean 0 and standard deviation epsilon
-    dist = Normal(0, epsilon)
-    return torch.exp(dist.log_prob(x)) / torch.exp(dist.log_prob(torch.tensor(0)))
-
-
-def FLAME_based_alpha_calculator_v_gauss(distances, m, e):
-    min_d, _ = torch.min(distances, 2)
-    alpha = sigma(min_d, epsilon=e)
-    return alpha
-
-
-def FLAME_based_alpha_calculator_v_solid(distances, m, e):
-    min_d, _ = torch.min(distances, 2)
-    alpha = torch.where(min_d <= e, torch.tensor(1), torch.tensor(0))
-    return alpha
-
-
-def FLAME_based_alpha_calculator_f_relu(min_d, m, e):
-    alpha = 1 - ((m(min_d) / e) - (m(min_d - e) / e))
-    return alpha
-
-
-def FLAME_based_alpha_calculator_f_gauss(min_d, m, e):
-    alpha = sigma(min_d, epsilon=e)
-    return alpha
-
-
-def FLAME_based_alpha_calculator_f_solid(min_d, m, e):
-    alpha = torch.where(min_d <= e, torch.tensor(1), torch.tensor(0))
-    return alpha
-
-
-def FLAME_based_alpha_calculator_3_face_version(set_of_coordinates, mesh_points, mesh_faces):
-    mesh_points = [mesh_points]
-    mesh_faces = [mesh_faces]
-
-    set_of_coordinates_size = set_of_coordinates.size()
-    set_of_coordinates = [torch.flatten(set_of_coordinates, 0, 1)]
-
-    p_mesh = Meshes(verts=mesh_points, faces=mesh_faces)
-    p_points = Pointclouds(points=set_of_coordinates)
-
-    dists, idxs = point_mesh_face_distance(p_mesh, p_points)
-    dists = torch.sqrt(dists)
-    dists, idxs = torch.reshape(dists, (set_of_coordinates_size[0], set_of_coordinates_size[1])), \
-                  torch.reshape(idxs, (set_of_coordinates_size[0], set_of_coordinates_size[1]))
-
-    return dists, idxs
-
-
-def distance_from_triangle(point, triangle):
-    # Define vectors for triangle edges
-    v0 = triangle[..., 2, :] - triangle[..., 0, :]
-    v1 = triangle[..., 1, :] - triangle[..., 0, :]
-    v2 = point - triangle[..., 0, :]
-
-    # Find normal of the triangle plane
-    plane_normal = torch.cross(v0, v1)
-    plane_normal = plane_normal / torch.norm(plane_normal, dim=-1, keepdim=True)
-    # Find distance from point to plane using the formula:
-    # d = |(P-A).N| / |N|
-    d = torch.abs(torch.sum(v2 * plane_normal, dim=-1))
-
-    # Find the closest point on the plane to the given point
-    closest_point = point - torch.abs(plane_normal * d.unsqueeze(-1))
-    distance_2d = distance_from_triangle_2d(closest_point, triangle)
-    return torch.sqrt(torch.pow(d, 2) + torch.pow(distance_2d, 2))
-
-
-def distance_from_triangle_2d(point, triangle):
-    # Calculate vectors for edges of triangle
-    v0 = triangle[..., 1, :] - triangle[..., 0, :]
-    v1 = triangle[..., 2, :] - triangle[..., 0, :]
-    v2 = point - triangle[..., 0, :]
-    d00 = torch.sum(v0 * v0, dim=-1)
-    d01 = torch.sum(v0 * v1, dim=-1)
-    d11 = torch.sum(v1 * v1, dim=-1)
-    d20 = torch.sum(v2 * v0, dim=-1)
-    d21 = torch.sum(v2 * v1, dim=-1)
-    denom = d00 * d11 - d01 * d01
-    v = (d11 * d20 - d01 * d21) / denom
-    w = (d00 * d21 - d01 * d20) / denom
-    u = 1 - v - w
-    inside_triangle = (u >= 0) & (v >= 0) & (w >= 0)
-
-    # Point is outside the triangle
-    # Find closest point on each edge and return distance to closest one
-    d1 = distance_point_to_line_segment(point, triangle[..., 0, :], triangle[..., 1, :])
-    d2 = distance_point_to_line_segment(point, triangle[..., 0, :], triangle[..., 2, :])
-    d3 = distance_point_to_line_segment(point, triangle[..., 1, :], triangle[..., 2, :])
-    return torch.where(inside_triangle, torch.tensor([0], dtype=torch.float), torch.minimum(torch.minimum(d1, d2), d3))
-
-
-def distance_point_to_line_segment(point, line_point1, line_point2):
-    # Create the line vector
-    line_vec = line_point2 - line_point1
-    # Normalize the line vector
-    line_vec = line_vec / torch.norm(line_vec, dim=-1, keepdim=True)
-    # Create a vector from point to line_point1
-    point_vec = point - line_point1
-    # Get the scalar projection of point_vec onto line_vec
-    scalar_projection = torch.sum(point_vec * line_vec, dim=-1)
-    # Multiply line_vec by the scalar projection to get the projection vector
-    projection_vec = scalar_projection.unsqueeze(-1) * line_vec
-    # Add the projection vector to line_point1 to get the projected point
-    projected_point = line_point1 + projection_vec
-    # Check if the projection is inside or outside the line segment
-    inside_segment = (scalar_projection >= 0) & (scalar_projection <= torch.norm(line_point2 - line_point1, dim=-1))
-
-    return torch.where(inside_segment, torch.norm(point - projected_point, dim=-1),
-                       torch.min(torch.norm(point - line_point1, dim=-1), torch.norm(point - line_point2, dim=-1)))
-
-
-def FLAME_based_alpha_calculator_4_face_version(set_of_coordinates, mesh_points, mesh_faces):
-    f_distances = torch.empty(set_of_coordinates.shape[0], set_of_coordinates.shape[1], mesh_faces.shape[0])
-    for i, points in enumerate(set_of_coordinates):
-        # Iterate through all the faces in the mesh
-        for j, point in enumerate(points):
-            for k, face in enumerate(mesh_faces):
-                # Get the coordinates of the triangle
-                triangle = mesh_points[face]
-                # Apply the distance function to the point and triangle
-                f_distances[i][j][k] = distance_from_triangle(point, triangle)
-    return f_distances
-
-
-def FLAME_based_alpha_calculator_5_face_version(set_of_coordinates, mesh_points, mesh_faces, v_distances):
-    # Get the top 3 closest mesh points for each point in set_of_coordinates
-    top_i = torch.topk(v_distances, k=3, dim=2, largest=False).indices
-
-    # Get the coordinates of the top 3 closest mesh points for each point in set_of_coordinates
-    triangle = mesh_points[top_i]
-
-    # Calculate the distance from each point in set_of_coordinates to the corresponding triangle
-    f_distances = distance_from_triangle(set_of_coordinates, triangle)
-
-    return f_distances
-
-
-def transform_pt(point, trans_mat):
-    a = np.array([point[0], point[1], point[2], 1])
-    ap = np.dot(a, trans_mat)[:3]
-    return [ap[0], ap[1], ap[2]]
-
-
-def render_rays(f_vert,
-                f_faces,
-                ray_batch,
-                network_fn,
-                network_query_fn,
-                N_samples,
-                retraw=False,
-                lindisp=False,
-                perturb=0.,
-                N_importance=0,
-                network_fine=None,
-                white_bkgd=False,
-                raw_noise_std=0.,
-                verbose=False,
-                pytest=False,
-                epsilon=0.04,
-                fake_epsilon=0.06,
-                trans_mat=None,
-                offset=None,
-                use_viewdirs=False):
     """Volumetric rendering.
     Args:
       ray_batch: array of shape [batch_size, ...]. All information necessary
@@ -718,7 +441,6 @@ def render_rays(f_vert,
       z_std: [num_rays]. Standard deviation of distances along ray for each
         sample.
     """
-    N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
 
@@ -841,7 +563,7 @@ def config_parser():
                         help='specific weights npy file to reload for coarse network')
 
     # rendering options
-    parser.add_argument("--N_samples", type=int, default=64,
+    parser.add_argument("--N_samples", type=int, default=1,
                         help='number of coarse samples per ray')
     parser.add_argument("--N_importance", type=int, default=0,
                         help='number of additional fine samples per ray')
@@ -913,9 +635,13 @@ def config_parser():
     parser.add_argument("--generate_video", type=bool, default=False,
                         help='decision if generate_video')
 
-    parser.add_argument("--epsilon", type=float, default=0.04)
-    parser.add_argument("--fake_epsilon", type=float, default=0.06)
-
+    parser.add_argument("--epsilon", type=float, default=0.001)
+    parser.add_argument("--near", type=float, default=0)
+    parser.add_argument("--far", type=float, default=10)
+    parser.add_argument("--radius", type=float, default=16.0)
+    parser.add_argument("--vertice_size", type=float, default=8.0)
+    parser.add_argument("--extra_transform", type=bool, default=True)
+    parser.add_argument("--f_lr", type=float, default=0.001)
     parser.add_argument(
         '--flame_model_path',
         type=str,
@@ -1102,15 +828,15 @@ def train():
         print('NEAR FAR', near, far)
 
     elif args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
+        images, poses, render_poses, hwf, i_split = load_blender_data(
+            args.datadir, args.radius, args.extra_transform,
+            args.half_res, args.testskip
+        )
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 8.
-        far = 26.
-
-        # near = 2.
-        # far = 6.
+        near = args.near
+        far = args.far
 
         if args.white_bkgd:
             images = images[..., :3] * images[..., -1:] + (1. - images[..., -1:])
@@ -1182,7 +908,7 @@ def train():
     f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(device))
     f_trans = nn.Parameter(torch.zeros(1, 3).float().to(device))
 
-    f_lr = 0.0001
+    f_lr = args.f_lr
     f_wd = 0.0001
     f_opt = torch.optim.Adam(
         params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],
@@ -1215,13 +941,16 @@ def train():
         f_neck_pose = ckpt['f_neck_pose'].to(device)
         f_trans = ckpt['f_trans'].to(device)
         args.epsilon = ckpt['epsilon']
-        args.fake_epsilon = ckpt['fake_epsilon']
 
     vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
     vertice = torch.squeeze(vertice)
     vertice = vertice.cuda()
 
-    vertice *= 23
+    if args.extra_transform:
+        vertice = vertice[:, [0, 2, 1]]
+        vertice[:, 1] = -vertice[:, 1]
+
+    vertice *= args.vertice_size
 
     faces = flamelayer.faces
     faces = torch.tensor(faces.astype(np.int32))
@@ -1357,11 +1086,15 @@ def train():
         vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
         vertice = torch.squeeze(vertice)
 
-        vertice *= 23
+        if args.extra_transform:
+            vertice = vertice[:, [0, 2, 1]]
+            vertice[:, 1] = -vertice[:, 1]
+        vertice *= args.vertice_size
 
-        rgb_f, disp_f, acc_f, extras_f = render(vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,
-                                                verbose=i < 10, retraw=True, offset=f_trans,
-                                                **render_kwargs_train)
+        rgb_f, disp_f, acc_f, extras_f = render(
+            vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,
+            verbose=i < 10, retraw=True, offset=f_trans,
+            **render_kwargs_train)
 
         aaa = rgb_f.all()
         img_loss_f = img2mse(rgb_f, target_s)
@@ -1414,7 +1147,6 @@ def train():
                     'f_trans': f_trans,
                     'f_neck_pose': f_neck_pose,
                     'epsilon': render_kwargs_test['epsilon'],
-                    'fake_epsilon': render_kwargs_test['fake_epsilon'],
                 }, path)
             else:
                 torch.save({
@@ -1429,7 +1161,6 @@ def train():
                     'f_trans': f_trans,
                     'f_neck_pose': f_neck_pose,
                     'epsilon': render_kwargs_test['epsilon'],
-                    'fake_epsilon': render_kwargs_test['fake_epsilon'],
                 }, path)
             print('Saved checkpoints at', path)
 
