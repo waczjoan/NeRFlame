@@ -640,7 +640,7 @@ def config_parser():
     parser.add_argument("--far", type=float, default=10)
     parser.add_argument("--radius", type=float, default=16.0)
     parser.add_argument("--vertice_size", type=float, default=8.0)
-    parser.add_argument("--extra_transform", type=bool, default=True)
+    parser.add_argument("--extra_transform", action='store_true')
     parser.add_argument("--f_lr", type=float, default=0.001)
     parser.add_argument(
         '--flame_model_path',

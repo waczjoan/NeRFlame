@@ -1,4 +1,4 @@
-expname = points_on_mesh__f_lr_0.00005__lrate_0_0005__N_rand_1024
+expname = points_on_mesh__f_lr_0.00005__lrate_0_0005__N_rand_1024_netdepth_8_netwidth_512_N_importance_10
 
 basedir = logs
 datadir = data/dataset_tencobyl
@@ -26,8 +26,8 @@ llffhold = 8
 perturb=1
 netdepth=8
 netdepth_fine=8
-netwidth=256
-netwidth_fine=256
+netwidth=512
+netwidth_fine=512
 
 use_viewdirs = False
 
@@ -40,5 +40,5 @@ chunk_render=16384
 
 i_embed=0
 
-i_video=5000
-i_testset=5000
+i_video=10000
+i_testset=10000

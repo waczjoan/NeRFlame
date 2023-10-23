@@ -41,6 +41,30 @@ def intersection_points_on_mesh(
                 A tensor containing the intersection points
                 for each ray, reshaped to (3, N).
     """
+
+    """ray_idxs, selected_face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
+        faces=faces.detach().clone().cpu(),
+        vertices=vertices.detach().clone().cpu(),
+        ray_origins=ray_origins.detach().clone().cpu(),
+        ray_directions=ray_directions.detach().clone().cpu(),
+    )
+
+    pts = torch.zeros(ray_origins.shape[0], 3)
+
+    for i, j in zip(ray_idxs, selected_face_idxs):
+        out = rays_triangles_intersection(
+            ray_origins=ray_origins[i].unsqueeze(0),
+            ray_directions=ray_directions[i].unsqueeze(0),
+            triangle_vertices=vertices[faces[j].long()].unsqueeze(0),
+        )
+        pts[i] = out['pts'][0]
+    #intersection_pts = out['pts_nearest_each_ray']
+    pts = pts.unsqueeze(0).swapaxes(0, 1)
+
+    #ray_idxs = out["nearest_points_idx"][0]
+    return ray_idxs, pts
+    """
+
     out = rays_triangles_intersection(
         ray_origins=ray_origins,
         ray_directions=ray_directions,
