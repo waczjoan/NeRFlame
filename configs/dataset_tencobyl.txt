@@ -8,7 +8,6 @@ near = 8.
 far = 26.
 radius = 16.
 vertice_size = 23.
-extra_transform = False
 f_lr = 0.00005
 
 no_batching = False
@@ -40,5 +39,5 @@ chunk_render=16384
 
 i_embed=0
 
-i_video=10000
-i_testset=10000
+i_video=100
+i_testset=100

@@ -6,6 +6,7 @@ dataset_type = blender
 no_batching = False
 white_bkgd = True
 half_res = True
+extra_transform
 
 factor = 8
 llffhold = 8
