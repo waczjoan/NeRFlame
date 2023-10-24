@@ -1,4 +1,5 @@
-expname = face_M1000_N_points_on_mesh__f_lr_0_000001__lrate_0_001__N_rand_1024
+expname = face_M1000_N___f_lr_0_001__lrate_0_005___importance_100_only_one_fn_double_norm_epsilion_1_zeros
+
 basedir = ./logs
 datadir = data/face_M1000_N
 dataset_type = blender
@@ -15,10 +16,13 @@ near = 2.
 far = 6.
 radius = 4.
 vertice_size = 8.
-f_lr = 0.000001
+f_lr = 0.001
+extra_transform = True
+N_importance = 0
+epsilon=1
 
 
-lrate=0.001
+lrate=0.005
 lrate_decay=750
 
 perturb=1
@@ -33,8 +37,9 @@ render_only=False
 render_test=False
 render_factor=0
 
-chunk=16384
-chunk_render=16384
+netchunk=4096
+chunk=4096
+chunk_render=4096
 
 i_embed=0
 

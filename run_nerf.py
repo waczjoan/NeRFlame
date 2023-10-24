@@ -3,6 +3,7 @@ import sys
 import time
 
 import imageio
+import torch
 from tqdm import tqdm, trange
 
 from load_LINEMOD import load_LINEMOD_data
@@ -23,7 +24,7 @@ from FLAME import FLAME
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-np.random.seed(0)
+np.random.seed(42)
 DEBUG = False
 torch.autograd.set_detect_anomaly(True)
 
@@ -444,17 +445,27 @@ def render_rays(
     rays_o, rays_d = ray_batch[:, 0:3], ray_batch[:, 3:6]  # [N_rays, 3] each
     viewdirs = ray_batch[:, -3:] if ray_batch.shape[-1] > 8 else None
 
-    ray_idxs_intersection_mash,  pts = intersection_points_on_mesh(
+    ray_idxs_intersection_mash,  pts, pts_diff_sum = intersection_points_on_mesh(
         faces=f_faces,
         vertices=f_vert,
         ray_origins=rays_o,
         ray_directions=rays_d,
     )
 
+    extra_pts = sample_extra_points_on_mesh(
+        points=pts.squeeze(dim=1),
+        ray_directions=rays_d,
+        n_points=100,
+        eps=epsilon,
+    )
+
+    pts_final = torch.zeros_like(extra_pts)
+    pts_final[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
+
     z_vals = transform_points_to_single_number_representation(
         ray_directions=rays_d,
         ray_origin=rays_o,
-        points=pts
+        points=pts_final
     )
 
     z_vals, _ = torch.sort(z_vals, -1)
@@ -472,7 +483,9 @@ def render_rays(
         use_viewdirs=use_viewdirs
     )
 
-    if N_importance > 0:
+    #if N_importance > 0:
+    run = False
+    if run:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
 
         extra_pts = sample_extra_points_on_mesh(
@@ -635,7 +648,7 @@ def config_parser():
     parser.add_argument("--generate_video", type=bool, default=False,
                         help='decision if generate_video')
 
-    parser.add_argument("--epsilon", type=float, default=0.001)
+    parser.add_argument("--epsilon", type=float, default=0.04)
     parser.add_argument("--near", type=float, default=0)
     parser.add_argument("--far", type=float, default=10)
     parser.add_argument("--radius", type=float, default=16.0)
@@ -909,7 +922,7 @@ def train():
     f_trans = nn.Parameter(torch.zeros(1, 3).float().to(device))
 
     f_lr = args.f_lr
-    f_wd = 0.0001
+    f_wd = 0.001
     f_opt = torch.optim.Adam(
         params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],
         lr=f_lr,

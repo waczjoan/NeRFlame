@@ -1,4 +1,4 @@
-expname = points_on_mesh__f_lr_0.00005__lrate_0_0005__N_rand_1024_netdepth_8_netwidth_512_N_importance_10
+expname = points_on_mesh__f_lr_0.00005__lrate_0_0005__N_rand_1024_netdepth_8_netwidth_512_v2
 
 basedir = logs
 datadir = data/dataset_tencobyl

@@ -42,40 +42,49 @@ def intersection_points_on_mesh(
                 for each ray, reshaped to (3, N).
     """
 
-    """ray_idxs, selected_face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
+    ray_idxs_obj, selected_face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
         faces=faces.detach().clone().cpu(),
         vertices=vertices.detach().clone().cpu(),
         ray_origins=ray_origins.detach().clone().cpu(),
         ray_directions=ray_directions.detach().clone().cpu(),
     )
 
-    pts = torch.zeros(ray_origins.shape[0], 3)
-
-    for i, j in zip(ray_idxs, selected_face_idxs):
-        out = rays_triangles_intersection(
-            ray_origins=ray_origins[i].unsqueeze(0),
-            ray_directions=ray_directions[i].unsqueeze(0),
-            triangle_vertices=vertices[faces[j].long()].unsqueeze(0),
-        )
-        pts[i] = out['pts'][0]
-    #intersection_pts = out['pts_nearest_each_ray']
-    pts = pts.unsqueeze(0).swapaxes(0, 1)
-
-    #ray_idxs = out["nearest_points_idx"][0]
-    return ray_idxs, pts
-    """
-
     out = rays_triangles_intersection(
-        ray_origins=ray_origins,
-        ray_directions=ray_directions,
-        triangle_vertices=vertices[faces.long()],
+        ray_origins=ray_origins.double(),
+        ray_directions=ray_directions.double(),
+        triangle_vertices=vertices[faces.long()].double(),
     )
 
-    intersection_pts = out['pts_nearest_each_ray']
+    intersection_pts = out['pts_nearest_each_ray'].float()
     pts = intersection_pts.unsqueeze(0).swapaxes(0, 1)
 
     ray_idxs = out["nearest_points_idx"][0]
-    return ray_idxs, pts
+    rs = ray_idxs.detach().cpu().numpy()
+
+    triangle_idxs = out["nearest_points_idx"][1]
+    ts = triangle_idxs.detach().cpu().numpy()
+
+    # test
+    #assert (rs == ray_idxs_obj).all()
+    #if ~(ts == selected_face_idxs).all():
+    #    torch.save(vertices, 'vertices.pt')
+    #    torch.save(faces, 'faces.pt')
+    #    torch.save(ray_directions, 'ray_directions.pt')
+    #    torch.save(ray_origins, 'ray_origins.pt')
+
+    #assert (ts == selected_face_idxs).all()
+
+    pts_diff = pts.detach() - _pts
+    pts_diff_sum = pts_diff.sum()
+    if pts_diff_sum > 0.005:
+        print(pts_diff_sum)
+        torch.save(vertices, 'vertices.pt')
+        torch.save(faces, 'faces.pt')
+        torch.save(ray_directions, 'ray_directions.pt')
+        torch.save(ray_origins, 'ray_origins.pt')
+
+    assert pts_diff_sum < 0.005
+    return ray_idxs, pts, pts_diff_sum
 
 
 def rays_triangles_intersection(
@@ -122,7 +131,7 @@ def rays_triangles_intersection(
     t = -((n_expanded * ray_origins_expanded).sum(dim=-1) + d)
     tt = (n_expanded * ray_directions_norm_expanded).sum(dim=-1)
 
-    _tt = torch.where(tt == 0, 0.0005, tt)
+    _tt = torch.where(tt == 0, 0.005, tt)
 
     t /= _tt
 
@@ -159,8 +168,9 @@ def rays_triangles_intersection(
 
     nearest_points = nearest_valid_point_mask * valid_point
     nearest_points_idx = torch.where(nearest_points == 1)
-    pts_nearest_each_ray = torch.zeros(num_rays, 3)
-    pts_nearest_each_ray[nearest_points_idx[0]] = pts[nearest_points_idx]
+
+    pts_nearest_each_ray = torch.zeros(num_rays, 3).double()
+    pts_nearest_each_ray[nearest_points_idx[0].long()] = pts[nearest_points_idx].double()
 
     out = {
         'pts': pts,
@@ -269,6 +279,8 @@ def sample_extra_points_on_mesh(
         mean=0,
         std=torch.ones(ray_directions_norm.shape[0], n_points) * eps
     )
+
+    #epsilons = torch.rand(ray_directions_norm.shape[0], n_points) * eps
 
     # Expand dimensions to match the target shape (n, m, 3)
     ray_directions_norm = ray_directions_norm.unsqueeze(1)
