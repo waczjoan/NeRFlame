@@ -1,4 +1,4 @@
-name: nerflame-gan
+name: nerflame
 channels:
   - pytorch
   - nvidia
@@ -30,9 +30,11 @@ dependencies:
     - gpustat
     - opencv-python
     - pyrender==0.1.39
-    - trimesh==3.6.18
+    - trimesh==4.0.0
+    # embreex
     - smplx
     - matplotlib
+    - numpy==1.26.0
     - configargparse
     - tqdm
     - git+https://github.com/mattloper/chumpy

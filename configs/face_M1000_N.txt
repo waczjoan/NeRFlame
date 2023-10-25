@@ -25,6 +25,7 @@ netdepth=8
 netdepth_fine=8
 netwidth=256
 netwidth_fine=256
+extra_transform
 
 use_viewdirs = False
 
@@ -32,8 +33,8 @@ render_only=False
 render_test=False
 render_factor=0
 
-chunk=16384
-chunk_render=16384
+chunk=4096
+chunk_render=4096
 
 i_embed=0
 

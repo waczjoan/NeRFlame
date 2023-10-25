@@ -25,6 +25,7 @@ netdepth=8
 netdepth_fine=8
 netwidth=256
 netwidth_fine=256
+extra_transform
 
 use_viewdirs = False
 

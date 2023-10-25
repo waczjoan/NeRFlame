@@ -21,6 +21,11 @@ from torch.autograd import Function
 # import datetime
 from torch.distributions import Normal
 
+from mesh_utils import (
+    intersection_points_on_mesh,
+    transform_points_to_single_number_representation
+)
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 np.random.seed(0)
@@ -731,6 +736,25 @@ def render_rays(f_vert,
 
     pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  # [N_rays, N_samples, 3]
 
+    _, int_pts = intersection_points_on_mesh(
+        faces=f_faces,
+        vertices=f_vert,
+        rays_o=rays_o,
+        rays_d=rays_d,
+    )
+    int_pts = int_pts.unsqueeze(0).swapaxes(0, 1)
+    pts = torch.concat((pts, int_pts), dim=1)
+    z_pts = transform_points_to_single_number_representation(rays_o, rays_d, int_pts)
+    z_vals = torch.concat((z_vals, z_pts), dim=1)
+    z_vals, idxs = torch.sort(z_vals, -1)
+    pts_size = pts.size()
+    pts = pts.flatten(0, 1)
+    idxs = idxs.flatten()
+    idx_offset = ((N_samples + 1) * torch.arange(N_rays).unsqueeze(-1).expand(N_rays, N_samples + 1)).flatten()
+    idxs = idxs + idx_offset
+    pts = torch.index_select(pts, 0, idxs)
+    pts = pts.reshape(pts_size)
+
     distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
 
     if offset is not None:
@@ -740,22 +764,7 @@ def render_rays(f_vert,
         trans_mat_organ = trans_mat[idx_f, :]
         pts = transform_pt(pts, trans_mat_organ)
 
-    # raw = run_network(pts)
     raw = network_query_fn(pts, viewdirs, network_fn)
-    # alpha_original = raw[:, :, -1]
-    # min_alpha_original = alpha_original.min()
-    # max_alpha_original = alpha_original.max()
-
-    # alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, alpha_original)
-    # a = alpha.sum()
-    # fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, alpha_original)
-
-    # m = torch.nn.ReLU()
-    # alpha_wojtka = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
-    # min_distances_f = distances_f.min()
-    # b = alpha_wojtka.abs().sum()
-    # max_alpha_wojtka = alpha_wojtka.max()
-    # min_alpha_wojtka = alpha_wojtka.min()
 
     rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
     raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
@@ -927,6 +936,12 @@ def config_parser():
 
     parser.add_argument("--epsilon", type=float, default=0.04)
     parser.add_argument("--fake_epsilon", type=float, default=0.06)
+    parser.add_argument("--near", type=float, default=0)
+    parser.add_argument("--far", type=float, default=10)
+    parser.add_argument("--radius", type=float, default=16.0)
+    parser.add_argument("--vertice_size", type=float, default=8.0)
+    parser.add_argument("--extra_transform", action='store_true')
+    parser.add_argument("--f_lr", type=float, default=0.001)
 
     parser.add_argument(
         '--flame_model_path',
@@ -1114,12 +1129,15 @@ def train():
         print('NEAR FAR', near, far)
 
     elif args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split = load_blender_data(args.datadir, args.half_res, args.testskip)
+        images, poses, render_poses, hwf, i_split = load_blender_data(
+            args.datadir, args.radius, args.extra_transform,
+            args.half_res, args.testskip
+        )
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
 
-        near = 8.
-        far = 26.
+        near = args.near
+        far = args.far
 
         # near = 2.
         # far = 6.
@@ -1194,7 +1212,7 @@ def train():
     f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(device))
     f_trans = nn.Parameter(torch.zeros(1, 3).float().to(device))
 
-    f_lr = 0.001
+    f_lr = args.f_lr
     f_wd = 0.0001
     f_opt = torch.optim.Adam(
         params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],
@@ -1233,7 +1251,11 @@ def train():
     vertice = torch.squeeze(vertice)
     vertice = vertice.cuda()
 
-    vertice *= 23
+    if args.extra_transform:
+        vertice = vertice[:, [0, 2, 1]]
+        vertice[:, 1] = -vertice[:, 1]
+
+    vertice *= args.vertice_size
 
     faces = flamelayer.faces
     faces = torch.tensor(faces.astype(np.int32))
@@ -1365,11 +1387,16 @@ def train():
         vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
         vertice = torch.squeeze(vertice)
 
-        vertice *= 23
+        if args.extra_transform:
+            vertice = vertice[:, [0, 2, 1]]
+            vertice[:, 1] = -vertice[:, 1]
+        
+        vertice *= args.vertice_size
 
-        rgb_f, disp_f, acc_f, extras_f = render(vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,
-                                                verbose=i < 10, retraw=True, offset=f_trans,
-                                                **render_kwargs_train)
+        rgb_f, disp_f, acc_f, extras_f = render(
+            vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,
+            verbose=i < 10, retraw=True, offset=f_trans,
+            **render_kwargs_train)
 
         img_loss_f = img2mse(rgb_f, target_s)
         trans_f = extras_f['raw'][..., -1]

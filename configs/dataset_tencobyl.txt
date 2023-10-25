@@ -1,22 +1,23 @@
-expname = dataset_tencobyl_radius_16_epsilion_20000_fake_epsilion_20000_resize_800_alfa_cal_in_raw2outputs
+expname = points_on_mesh__f_lr_0.00005__lrate_0_0005__N_rand_1024
 
 basedir = logs
 datadir = data/dataset_tencobyl
 dataset_type = blender
+
+near = 8.
+far = 26.
+radius = 16.
+vertice_size = 23.
+f_lr = 0.00005
 
 no_batching = False
 white_bkgd = True
 half_res = True
 
 N_rand = 1024
-N_samples = 140
-N_importance = 140
 
-lrate=0.001
+lrate=0.0005
 lrate_decay=750
-
-epsilon=20000
-fake_epsilon=20000
 
 factor = 8
 llffhold = 8
