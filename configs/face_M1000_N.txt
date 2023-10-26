@@ -1,4 +1,4 @@
-expname = face_M1000_N__t1__shape_f_exp_f_lr_0.001_2
+expname = face_M1000_N__max_alpha_without_vd_use_4th_canal
 
 
 basedir = ./logs
