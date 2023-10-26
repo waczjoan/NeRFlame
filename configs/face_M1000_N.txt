@@ -1,4 +1,5 @@
-expname = face_M1000_N___f_lr_0_001__lrate_0_005___importance_100_only_one_fn_double_norm_epsilion_1_zeros
+expname = face_M1000_N__t1__shape_f_exp_f_lr_0.001_2
+
 
 basedir = ./logs
 datadir = data/face_M1000_N
@@ -19,7 +20,7 @@ vertice_size = 8.
 f_lr = 0.001
 extra_transform = True
 N_importance = 0
-epsilon=1
+epsilon=0.0165
 
 
 lrate=0.005

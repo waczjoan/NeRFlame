@@ -484,7 +484,7 @@ def render_rays(
     idxs = torch.arange(z_vals.shape[0]).reshape(-1, 1) * torch.ones_like(z_vals)
     dis = distance[idxs.long(), z_vals_idx]
 
-    raw = network_query_fn(pts_final.clone().detach(), viewdirs, network_fn)
+    raw = network_query_fn(pts_final, viewdirs, network_fn)
 
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
         raw=raw,
@@ -942,7 +942,7 @@ def train():
     f_lr = args.f_lr
     f_wd = 0.001
     f_opt = torch.optim.Adam(
-        params=[f_shape, f_exp, f_pose, f_neck_pose, f_trans],
+        params=[f_shape, f_exp, f_pose, f_neck_pose],
         lr=f_lr,
         weight_decay=f_wd
     )
