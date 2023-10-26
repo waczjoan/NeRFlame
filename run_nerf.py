@@ -327,7 +327,9 @@ def raw2outputs(
     raw,
     z_vals,
     rays_d,
+    pts_dist,
     raw_noise_std=0.0,
+    epsilon=0.001,
     white_bkgd=False,
     pytest=False,
     ray_idxs_intersection_mash = [],
@@ -369,13 +371,20 @@ def raw2outputs(
             )  # [N_rays, N_samples]
 
             dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
-            alpha = raw2alpha(raw[..., 3] + noise, dists)
+            _alpha = raw2alpha(raw[..., 3] + noise, dists)
+            alpha = torch.zeros_like(_alpha)
+            alpha[ray_idxs_intersection_mash] = _alpha[ray_idxs_intersection_mash]
+            alpha = torch.where(
+                pts_dist.abs() < epsilon,
+                alpha, 0
+            )
 
         else:
             alpha = torch.zeros(raw.shape[0], 1)
             alpha[ray_idxs_intersection_mash] = 1
 
     aa = alpha.max()
+
     weights = alpha * torch.cumprod(
         torch.cat([torch.ones(
             (alpha.shape[0], 1)
@@ -452,25 +461,30 @@ def render_rays(
         ray_directions=rays_d,
     )
 
-    extra_pts = sample_extra_points_on_mesh(
+    extra_pts, distance = sample_extra_points_on_mesh(
         points=pts.squeeze(dim=1),
         ray_directions=rays_d,
         n_points=100,
-        eps=epsilon,
+        eps=3*epsilon,
     )
 
-    pts_final = torch.zeros_like(extra_pts)
-    pts_final[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
+    _pts_final = torch.zeros_like(extra_pts)
+    _pts_final[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
 
     z_vals = transform_points_to_single_number_representation(
         ray_directions=rays_d,
         ray_origin=rays_o,
-        points=pts_final
+        points=_pts_final
     )
 
-    z_vals, _ = torch.sort(z_vals, -1)
+    z_vals, z_vals_idx = torch.sort(z_vals, -1)
+    pts_final = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]  #
 
-    raw = network_query_fn(pts, viewdirs, network_fn)
+
+    idxs = torch.arange(z_vals.shape[0]).reshape(-1, 1) * torch.ones_like(z_vals)
+    dis = distance[idxs.long(), z_vals_idx]
+
+    raw = network_query_fn(pts_final.clone().detach(), viewdirs, network_fn)
 
     rgb_map, disp_map, acc_map, weights, depth_map = raw2outputs(
         raw=raw,
@@ -480,7 +494,9 @@ def render_rays(
         white_bkgd=white_bkgd,
         pytest=pytest,
         ray_idxs_intersection_mash=ray_idxs_intersection_mash,
-        use_viewdirs=use_viewdirs
+        use_viewdirs=use_viewdirs,
+        epsilon=epsilon,
+        pts_dist=dis
     )
 
     #if N_importance > 0:
@@ -501,7 +517,7 @@ def render_rays(
             points=extra_pts
         )
 
-        z_vals, _ = torch.sort(z_vals, -1)
+        z_vals, z_vals_idx= torch.sort(z_vals, -1)
 
         run_fn = network_fn if network_fine is None else network_fine
 
@@ -514,7 +530,9 @@ def render_rays(
             raw_noise_std=raw_noise_std,
             white_bkgd=white_bkgd,
             pytest=pytest,
-            use_viewdirs=use_viewdirs
+            use_viewdirs=use_viewdirs,
+            epsilon=epsilon,
+            pts_dist=distance
         )
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
@@ -970,6 +988,8 @@ def train():
     faces = torch.squeeze(faces)
     faces = faces.cuda()
 
+    torch.save(vertice, 'init_vertice.pt')
+
     # Create nerf model
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model = create_nerf(args)
     global_step = start
@@ -1096,6 +1116,13 @@ def train():
         f_opt.zero_grad()
         optimizer.zero_grad()
 
+        #f_shape = f_shape.detach()
+        #f_exp = f_exp.detach()
+        #f_pose = f_pose.detach()
+        #f_neck_pose = f_neck_pose.detach()
+        #f_trans = f_trans.detach()
+
+
         vertice, _ = flamelayer(f_shape, f_exp, f_pose, neck_pose=f_neck_pose, transl=f_trans)
         vertice = torch.squeeze(vertice)
 
@@ -1103,6 +1130,10 @@ def train():
             vertice = vertice[:, [0, 2, 1]]
             vertice[:, 1] = -vertice[:, 1]
         vertice *= args.vertice_size
+
+        if i == 500:
+            torch.save(f_exp, 'f_exp.pt')
+            torch.save(vertice, '4_f__vertice.pt')
 
         rgb_f, disp_f, acc_f, extras_f = render(
             vertice, faces, H, W, K, chunk=args.chunk, rays=batch_rays,

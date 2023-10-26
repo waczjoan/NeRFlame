@@ -42,12 +42,12 @@ def intersection_points_on_mesh(
                 for each ray, reshaped to (3, N).
     """
 
-    ray_idxs_obj, selected_face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
+    """ray_idxs_obj, selected_face_idxs, _pts = intersection_points_on_mesh_trimesh_obj(
         faces=faces.detach().clone().cpu(),
         vertices=vertices.detach().clone().cpu(),
         ray_origins=ray_origins.detach().clone().cpu(),
         ray_directions=ray_directions.detach().clone().cpu(),
-    )
+    )"""
 
     out = rays_triangles_intersection(
         ray_origins=ray_origins.double(),
@@ -74,7 +74,7 @@ def intersection_points_on_mesh(
 
     #assert (ts == selected_face_idxs).all()
 
-    pts_diff = pts.detach() - _pts
+    """pts_diff = pts.detach() - _pts
     pts_diff_sum = pts_diff.sum()
     if pts_diff_sum > 0.005:
         print(pts_diff_sum)
@@ -84,7 +84,8 @@ def intersection_points_on_mesh(
         torch.save(ray_origins, 'ray_origins.pt')
 
     assert pts_diff_sum < 0.005
-    return ray_idxs, pts, pts_diff_sum
+    """
+    return ray_idxs, pts, None
 
 
 def rays_triangles_intersection(
@@ -150,7 +151,8 @@ def rays_triangles_intersection(
 
     backface_intersection = torch.where(t < 0, 0, 1)
 
-    valid_point = (Pa > 0) & (Pb > 0) & (Pc > 0)  # [num_rays, num_triangles]
+    eps = 10**(-9)
+    valid_point = (Pa > -eps) & (Pb > -eps) & (Pc > -eps)  # [num_rays, num_triangles]
 
     _d = pts - ray_origins_expanded
     _d = (_d**2).sum(dim=2)
@@ -275,12 +277,12 @@ def sample_extra_points_on_mesh(
     )  # Unit vector (vector) of e => ê
 
     # Define your epsilon tensor (n, m)
-    epsilons = torch.normal(
-        mean=0,
-        std=torch.ones(ray_directions_norm.shape[0], n_points) * eps
-    )
+    #epsilons = torch.normal(
+    #    mean=0,
+    #    std=torch.ones(ray_directions_norm.shape[0], n_points) * eps
+    #)
 
-    #epsilons = torch.rand(ray_directions_norm.shape[0], n_points) * eps
+    epsilons = torch.rand(ray_directions_norm.shape[0], n_points) * 2 * eps - eps
 
     # Expand dimensions to match the target shape (n, m, 3)
     ray_directions_norm = ray_directions_norm.unsqueeze(1)
@@ -289,7 +291,10 @@ def sample_extra_points_on_mesh(
     # Add epsilon to ray_directions_norm using broadcasting
     result = ray_directions_norm * epsilons
     new_points = result + points.unsqueeze(1)
-    return new_points
+
+    dist_with_grad = (new_points - points.unsqueeze(1))/ray_directions_norm
+    dist_with_grad = dist_with_grad[:, :, 0]
+    return new_points, dist_with_grad
 
 
 def transform_points_to_single_number_representation(
