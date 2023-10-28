@@ -35,6 +35,9 @@ without_importance_dataset_face_M1000N_setup: &without_importance_dataset_face_M
 flame_dataset_face_M1000N_setup: &flame_dataset_face_M1000N_setup
     expname: "flame_nerf"
 
+default_flame_setup_params: &default_flame_setup_params
+  flame_model_path: './FLAME/model/generic_model.pkl'
+
 
 face_M1000N_default_module:
   module: "flame_nerf_mod.trainers.BlenderTrainer"
@@ -57,4 +60,10 @@ face_M1000N_default_module_flame:
   module: "flame_nerf_mod.trainers.FlameBlenderTrainer"
   kwargs:
     <<: *default_setup_params
+    <<: *without_importance_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
     <<: *flame_dataset_face_M1000N_setup
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params

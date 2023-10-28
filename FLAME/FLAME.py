@@ -211,7 +211,7 @@ class FLAME(nn.Module):
                 vertices: N X V X 3
                 landmarks: N X number of landmarks X 3
         """
-        betas = torch.cat([shape_params,self.shape_betas, expression_params, self.expression_betas], dim=1)
+        betas = torch.cat([shape_params, self.shape_betas, expression_params, self.expression_betas], dim=1)
         neck_pose = (neck_pose if neck_pose is not None else self.neck_pose)
         eye_pose = (eye_pose if eye_pose is not None else self.eye_pose)
         transl = (transl if transl is not None else self.transl)
