@@ -65,4 +65,5 @@ def transform_points_to_single_number_representation(
 ):
     result = (points - torch.unsqueeze(ray_origin, 1)) \
              / torch.unsqueeze(ray_directions, 1)
-    return torch.nanmean(result, dim=2)
+    result = torch.nanmean(result, dim=2)
+    return result
