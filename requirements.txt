@@ -1,0 +1,17 @@
+click==8.1.3
+pyyaml==6.0.1
+
+# NeRF, reference to fork
+git+https://github.com/waczjoan/nerf_pytorch@change_train_function_into_object
+
+# Current repository code
+--editable .
+
+# PyTorch
+--find-links https://download.pytorch.org/whl/torch_stable.html
+--find-links https://data.pyg.org/whl/torch-2.0.0+cu117.html
+torch==2.0.0+cu117
+
+
+
+

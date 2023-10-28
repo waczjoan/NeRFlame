@@ -1,4 +1,4 @@
-expname = face_M1000_N__max_alpha_without_vd_use_4th_canal
+expname = face_M1000_N__NERF
 
 
 basedir = ./logs
@@ -38,11 +38,11 @@ render_only=False
 render_test=False
 render_factor=0
 
-netchunk=4096
-chunk=4096
-chunk_render=4096
+netchunk=1024
+chunk=1024
+chunk_render=1024
 
 i_embed=0
 
 i_video=10000
-i_testset=10000
+i_testset=2000
