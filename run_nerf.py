@@ -925,7 +925,13 @@ def config_parser():
                         help='decision if generate_video')
 
     parser.add_argument("--epsilon", type=float, default=0.04)
+    parser.add_argument("--epsilon_stop", type=float, default=0.01,
+                        help='final value of epsilon scaling')
     parser.add_argument("--fake_epsilon", type=float, default=0.06)
+    parser.add_argument("--fake_epsilon_stop", type=float, default=0.01,
+                        help='final value of fake epsilon scaling')
+    parser.add_argument("--no_eps_decay_iters", type=int, default=1000,
+                        help='how many iterations to wait until decaying epsilon')
     parser.add_argument("--near", type=float, default=0)
     parser.add_argument("--far", type=float, default=10)
     parser.add_argument("--radius", type=float, default=16.0)
@@ -1312,6 +1318,9 @@ def train():
 
     N_iters = 40000 + 1
 
+    eps_decay = (args.epsilon_stop - args.epsilon) / (N_iters - args.no_eps_decay_iters) # linear decay for epsilon
+    fake_eps_decay = (args.fake_epsilon_stop - args.epsilon) / (N_iters - args.no_eps_decay_iters) # linear decay for fake epsilon
+
     print('Begin')
     print('TRAIN views are', i_train)
     print('TEST views are', i_test)
@@ -1418,6 +1427,13 @@ def train():
         new_lrate = args.lrate * (decay_rate ** (global_step / decay_steps))
         for param_group in optimizer.param_groups:
             param_group['lr'] = new_lrate
+
+        ###   update epsilon   ###
+        if global_step >= args.no_eps_decay_iters:
+            eps_step = global_step - args.no_eps_decay_iters
+            render_kwargs_test['epsilon'] = render_kwargs_train['epsilon'] = args.epsilon + eps_step * eps_decay
+            render_kwargs_test['fake_epsilon'] = render_kwargs_train['fake_epsilon'] = args.fake_epsilon + eps_step * fake_eps_decay
+
         ################################
 
         dt = time.time() - time0

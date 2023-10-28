@@ -19,6 +19,9 @@ lrate_decay=750
 
 epsilon=0.016
 fake_epsilon=0.04
+epsilon_stop=0.001
+fake_epsilon_stop=0.001
+no_eps_decay_iters=1000
 
 perturb=1
 netdepth=8
