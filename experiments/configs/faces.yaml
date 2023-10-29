@@ -6,7 +6,7 @@ default_setup_params: &default_setup_params
     N_rand: 1024
     device: 'cuda'
     i_weights: 50000
-    i_testset: 1500
+    i_testset: 300
     i_video: 100000
     i_print: 50000
     input_dims_embed: 3
@@ -73,7 +73,7 @@ face_M1000N_extra_points:
     <<: *default_setup_params
     <<: *without_importance_nerf_setup_params
     <<: *dataset_face_M1000N_setup
-    expname: "flame_nerf_extra_points_move_after_10_change_to_extra_30_sample_mal_6"
+    expname: "flame_nerf_extra_points_move_after_10_change_to_extra_128_sample_vertices_mal_start_8_f_lr_0_001_eps_lin_max_1_alpha_plus_f_trans_0__only_ray_init_rand"
     config:
      module: "FLAME.FlameConfig"
      kwargs:

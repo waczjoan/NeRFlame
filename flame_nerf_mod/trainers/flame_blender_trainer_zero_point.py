@@ -41,21 +41,23 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         flame_config = load_obj_from_config(cfg=config)
         self.model_flame = FLAME(flame_config).to(self.device)
 
-        self.f_shape = nn.Parameter(torch.zeros(1, 100).float().to(self.device))
-        self.f_exp = nn.Parameter(torch.zeros(1, 50).float().to(self.device))
-        self.f_pose = nn.Parameter(torch.zeros(1, 6).float().to(self.device))
-        self.f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(self.device))
+        self.f_shape = nn.Parameter(torch.rand(1, 100).float().to(self.device))
+        self.f_exp = nn.Parameter(torch.rand(1, 50).float().to(self.device))
+        self.f_pose = nn.Parameter(torch.rand(1, 6).float().to(self.device))
+        self.f_neck_pose = nn.Parameter(torch.rand(1, 3).float().to(self.device))
         self.f_trans = nn.Parameter(torch.zeros(1, 3).float().to(self.device))
+        self.vertices_mal = nn.Parameter(8 * torch.ones(1, 1).float().to(self.device))
 
         f_lr = 0.001
         f_wd = 0.0001
         self.f_opt = torch.optim.Adam(
-            params=[self.f_shape, self.f_exp, self.f_pose, self.f_neck_pose, self.f_trans],
+            params=[self.f_shape, self.f_exp, self.f_pose, self.f_neck_pose, self.f_trans, self.vertices_mal],
             lr=f_lr,
             weight_decay=f_wd
         )
 
         self.faces = self.flame_faces()
+        self.eps = None
 
     def flame_vertices(self):
         vertices, _ = self.model_flame(
@@ -67,7 +69,17 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
 
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
-        vertices *= 6
+        vertices *= self.vertices_mal
+
+        if self.tensorboard_logging:
+            self.log_on_tensorboard(
+                self.global_step,
+                {
+                    'train': {
+                        'vertices_mal': self.vertices_mal,
+                    }
+                }
+            )
 
         return vertices
 
@@ -170,7 +182,18 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
             weights: [num_rays, num_samples]. Weights assigned to each sampled color.
             depth_map: [num_rays]. Estimated distance to object.
         """
-        ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
+
+        if self.global_step > 10:
+            ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
+            distance = kwargs["distance"].abs()
+            mask = distance < self.eps/2
+            _mask = mask[ray_idxs_intersection_mash]
+            _rays = raw[ray_idxs_intersection_mash, : , 3]
+            raw[ray_idxs_intersection_mash, :, 3] = (1-_rays) * _mask.bool() + _rays
+
+            #mask_no_inter = torch.ones(raw.shape[0], 1)
+            #mask_no_inter[ray_idxs_intersection_mash] = 0
+            #raw[mask_no_inter.bool(), :, 3] = 0
 
         raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
@@ -228,11 +251,12 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         raw_noise_std,
         white_bkgd,
         pytest,
-        lindisp
+        lindisp,
+        **kwargs
     ):
 
         if self.global_step > 10:
-            N_samples = 30
+            N_samples = 10
 
         t_vals = torch.linspace(0., 1., steps=N_samples)
         if not lindisp:
@@ -262,6 +286,7 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
         ray_idxs_intersection_mash = None
+        distance = None
 
         if self.global_step > 10:
 
@@ -273,11 +298,25 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
                 ray_directions=rays_d,
             )
 
+            self.eps = 1 - self.global_step * 0.001
+            if self.eps < 0.04:
+                self.eps = 0.04
+            # self.eps = 0.02 + torch.sin(torch.pi*100 + torch.tensor(torch.pi/200 * self.global_step)).abs()
+            if self.tensorboard_logging:
+                self.log_on_tensorboard(
+                    self.global_step,
+                    {
+                        'train': {
+                            'eps': self.eps,
+                        }
+                    }
+                )
+
             extra_pts, distance = sample_extra_points_on_mesh(
                 points=pts_mesh.squeeze(dim=1),
                 ray_directions=rays_d,
                 n_points=N_samples,
-                eps=0.02,
+                eps=self.eps,
             )
 
             pts[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
@@ -288,9 +327,12 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
                 points=pts
             )
 
-            z_vals, _ = torch.sort(z_vals, -1)
+            z_vals, z_vals_idx = torch.sort(z_vals, -1)
+            idxs = torch.arange(z_vals.shape[0]).reshape(-1, 1) * torch.ones_like(z_vals)
+            distance = distance[idxs.long(), z_vals_idx]
 
             pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
+            pts[ray_idxs_intersection_mash] += self.f_trans
 
             if self.global_step - self.global_step // 1000 * 1000 == 0:
                 torch.save(pts, f'{self.global_step}_pts.pt')
@@ -304,6 +346,7 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
             z_vals=z_vals,
             rays_d=rays_d,
             ray_idxs_intersection_mash=ray_idxs_intersection_mash,
+            distance=distance,
             raw_noise_std=raw_noise_std,
             white_bkgd=white_bkgd,
             pytest=pytest
@@ -316,7 +359,8 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         optimizer, render_kwargs_train,
         batch_rays, i, target_s,
     ):
-        rgb, disp, acc, extras = render(self.H, self.W, self.K,
+        rgb, disp, acc, extras = render(
+            self.H, self.W, self.K,
             chunk=self.chunk, rays=batch_rays,
             verbose=i < 10, retraw=True,
             **render_kwargs_train
@@ -341,7 +385,6 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         self.f_opt.step()
 
         return trans, loss, psnr, psnr0
-
 
     def rest_is_logging(
         self, i, render_poses, hwf, poses, i_test, images,
@@ -374,6 +417,8 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
             os.makedirs(testsavedir, exist_ok=True)
             with torch.no_grad():
                 vertice_out = self.flame_vertices()
+                torch.save(vertice_out, f'test_{self.global_step}_vertice_out.pt')
+                torch.save(self.faces, f'test_{self.global_step}_faces.pt')
 
                 outmesh_path = os.path.join(testsavedir, 'face.obj')
                 write_simple_obj(mesh_v=vertice_out.detach().cpu().numpy(), mesh_f=self.faces,

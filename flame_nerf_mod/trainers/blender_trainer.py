@@ -56,7 +56,6 @@ class BlenderTrainer(Trainer):
     def create_nerf_model(self):
         return self._create_nerf_model(model=NeRF)
 
-
     def sample_main_points(
         self,
         near,
@@ -72,7 +71,8 @@ class BlenderTrainer(Trainer):
         raw_noise_std,
         white_bkgd,
         pytest,
-        lindisp
+        lindisp,
+        **kwargs
     ):
 
         t_vals = torch.linspace(0., 1., steps=N_samples)
