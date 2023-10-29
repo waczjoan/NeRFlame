@@ -1,4 +1,5 @@
-"""Promienie przebijają mesha, tam gdzie nie przebiją alpha = 0. Mesh się nie rusza"""
+"""Promienie przebijają mesha, tam gdzie przebiją to podmien na punkty blisko mesha. Mesh się nie rusza"""
+
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -21,7 +22,7 @@ from flame_nerf_mod.mesh_utils import (
 )
 
 
-class FlameBlenderTrainer(BlenderTrainer):
+class FlameReplacePointsBlenderTrainer(BlenderTrainer):
     """Trainer for Flame blender data."""
     def __init__(
             self,
@@ -61,7 +62,6 @@ class FlameBlenderTrainer(BlenderTrainer):
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
         vertices *= 9
-        vertices[:, 1] = vertices[:, 1]
 
         return vertices
 
@@ -166,11 +166,6 @@ class FlameBlenderTrainer(BlenderTrainer):
         """
         ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
 
-        mask = torch.ones_like(raw)
-        mask[ray_idxs_intersection_mash] = 0
-
-        raw[mask.bool()] = 0
-
         raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
         dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -193,11 +188,6 @@ class FlameBlenderTrainer(BlenderTrainer):
                 noise = torch.Tensor(noise)
 
         alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-
-        #mask_alpha = torch.ones_like(alpha)
-        #mask_alpha[ray_idxs_intersection_mash] = 0
-
-        #alpha[mask_alpha.bool()] = 0
 
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:,
                           :-1]
@@ -240,6 +230,13 @@ class FlameBlenderTrainer(BlenderTrainer):
             ray_directions=rays_d,
         )
 
+        extra_pts, distance = sample_extra_points_on_mesh(
+            points=pts_mesh.squeeze(dim=1),
+            ray_directions=rays_d,
+            n_points=N_samples,
+            eps=0.5,
+        )
+
         t_vals = torch.linspace(0., 1., steps=N_samples)
         if not lindisp:
             z_vals = near * (1. - t_vals) + far * t_vals
@@ -267,6 +264,15 @@ class FlameBlenderTrainer(BlenderTrainer):
         # [N_rays, N_samples, 3]
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
+        pts[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
+
+        z_vals = transform_points_to_single_number_representation(
+            ray_directions=rays_d,
+            ray_origin=rays_o,
+            points=pts
+        )
+
+        pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
 
         #torch.save(pts_mesh, 'pts_mesh.pt')

@@ -18,7 +18,7 @@ torch.set_default_tensor_type('torch.cuda.FloatTensor')
     "--model",
     help="Selected model",
     type=str,
-    default="face_M1000N_default_module_flame"
+    default="face_M1000N_default_module_flame_not_move_replace_0_point"
 )
 def main(
         hparams_path: str,

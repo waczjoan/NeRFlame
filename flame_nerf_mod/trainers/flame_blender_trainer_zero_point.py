@@ -21,7 +21,7 @@ from flame_nerf_mod.mesh_utils import (
 )
 
 
-class FlameBlenderTrainer(BlenderTrainer):
+class FlameBlenderTrainerPointZero(BlenderTrainer):
     """Trainer for Flame blender data."""
     def __init__(
             self,
@@ -267,10 +267,9 @@ class FlameBlenderTrainer(BlenderTrainer):
         # [N_rays, N_samples, 3]
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
-
-
-        #torch.save(pts_mesh, 'pts_mesh.pt')
-        #torch.save(pts, 'pts.pt')
+        mask = torch.ones_like(pts)
+        mask[ray_idxs_intersection_mash] = 0
+        pts[mask.bool()] = 0
 
         # [N_rays, N_samples, n_chanels]
         raw = network_query_fn(pts, viewdirs, network_fn)

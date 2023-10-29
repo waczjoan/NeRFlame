@@ -1,4 +1,3 @@
-"""Promienie przebijają mesha, tam gdzie nie przebiją alpha = 0. Mesh się nie rusza"""
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
@@ -21,7 +20,7 @@ from flame_nerf_mod.mesh_utils import (
 )
 
 
-class FlameBlenderTrainer(BlenderTrainer):
+class FlameReplacePointsMoveMeshBlenderTrainer(BlenderTrainer):
     """Trainer for Flame blender data."""
     def __init__(
             self,
@@ -61,7 +60,6 @@ class FlameBlenderTrainer(BlenderTrainer):
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
         vertices *= 9
-        vertices[:, 1] = vertices[:, 1]
 
         return vertices
 
@@ -166,11 +164,6 @@ class FlameBlenderTrainer(BlenderTrainer):
         """
         ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
 
-        mask = torch.ones_like(raw)
-        mask[ray_idxs_intersection_mash] = 0
-
-        raw[mask.bool()] = 0
-
         raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
         dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -194,10 +187,10 @@ class FlameBlenderTrainer(BlenderTrainer):
 
         alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
 
-        #mask_alpha = torch.ones_like(alpha)
-        #mask_alpha[ray_idxs_intersection_mash] = 0
-
-        #alpha[mask_alpha.bool()] = 0
+        if self.global_step > 1000:
+            mask_alpha = torch.ones_like(alpha)
+            mask_alpha[ray_idxs_intersection_mash] = 0
+            alpha[mask_alpha.bool()] = 0
 
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:,
                           :-1]
@@ -232,13 +225,7 @@ class FlameBlenderTrainer(BlenderTrainer):
         lindisp
     ):
 
-        vertices = self.flame_vertices()
-        ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
-            faces=self.faces,
-            vertices=vertices,
-            ray_origins=rays_o,
-            ray_directions=rays_d,
-        )
+        ray_idxs_intersection_mash = None
 
         t_vals = torch.linspace(0., 1., steps=N_samples)
         if not lindisp:
@@ -267,10 +254,15 @@ class FlameBlenderTrainer(BlenderTrainer):
         # [N_rays, N_samples, 3]
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
+        if self.global_step > 1000:
+            vertices = self.flame_vertices()
+            ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
+                faces=self.faces,
+                vertices=vertices,
+                ray_origins=rays_o,
+                ray_directions=rays_d,
+            )
 
-
-        #torch.save(pts_mesh, 'pts_mesh.pt')
-        #torch.save(pts, 'pts.pt')
 
         # [N_rays, N_samples, n_chanels]
         raw = network_query_fn(pts, viewdirs, network_fn)
@@ -313,5 +305,6 @@ class FlameBlenderTrainer(BlenderTrainer):
 
         loss.backward()
         optimizer.step()
+        self.f_opt.step()
 
         return trans, loss, psnr, psnr0

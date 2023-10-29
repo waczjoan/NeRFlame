@@ -21,19 +21,29 @@ without_importance_nerf_setup_params: &without_importance_nerf_setup_params
     N_samples: 64
     N_importance: 0
 
+without_importance_10_sample_nerf_setup_params: &without_importance_10_sample_nerf_setup_params
+    N_samples: 10
+    N_importance: 0
+
 dataset_face_M1000N_setup: &dataset_face_M1000N_setup
     basedir: "logs"
     datadir: "data/face_M1000_N"
     dataset_type: "blender"
 
 default_dataset_face_M1000N_setup: &default_dataset_face_M1000N_setup
-    expname: "nerf"
+    expname: "nerf_64_samples_128_importance"
 
 without_importance_dataset_face_M1000N_setup: &without_importance_dataset_face_M1000N_setup
-    expname: "nerf_without_importance"
+    expname: "nerf_64_sampes_0_importance"
 
 flame_dataset_face_M1000N_setup: &flame_dataset_face_M1000N_setup
-    expname: "flame_nerf"
+    expname: "flame_nerf_face_not_move_0_raw_if_no_intersection_mal_9"
+
+flame_extra_dataset_face_M1000N_setup: &flame_extra_dataset_face_M1000N_setup
+    expname: "flame_nerf_face_not_move_extra_points_if_intersection_mal_9"
+
+move_flame_extra_dataset_face_M1000N_setup: &move_flame_extra_dataset_face_M1000N_setup
+    expname: "flame_nerf_face_move_extra_points_if_intersection"
 
 default_flame_setup_params: &default_flame_setup_params
   flame_model_path: './FLAME/model/generic_model.pkl'
@@ -63,6 +73,54 @@ face_M1000N_default_module_flame:
     <<: *without_importance_nerf_setup_params
     <<: *dataset_face_M1000N_setup
     <<: *flame_dataset_face_M1000N_setup
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
+
+face_M1000N_default_module_flame_with_extra_points:
+  module: "flame_nerf_mod.trainers.FlameReplacePointsBlenderTrainer"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    <<: *flame_extra_dataset_face_M1000N_setup
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
+
+face_M1000N_default_module_flame_with_extra_points_move_mesh:
+  module: "flame_nerf_mod.trainers.FlameReplacePointsMoveMeshBlenderTrainer"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    <<: *move_flame_extra_dataset_face_M1000N_setup
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
+
+face_M1000N_default_module_flame_with_extra_points_move_mesh_10_sample:
+  module: "flame_nerf_mod.trainers.FlameReplacePointsMoveMeshBlenderTrainer"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_10_sample_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    expname: "flame_nerf_face_move_extra_points_if_intersection_10_samples"
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
+
+face_M1000N_default_module_flame_not_move_replace_0_point:
+  module: "flame_nerf_mod.trainers.FlameReplacePointsMoveMeshBlenderTrainer"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_10_sample_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    expname: "flame_nerf_face_not_move_0_point_if_no_intersection"
     config:
      module: "FLAME.FlameConfig"
      kwargs:
