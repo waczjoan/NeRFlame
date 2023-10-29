@@ -61,7 +61,7 @@ class FlameReplacePointsBlenderTrainer(BlenderTrainer):
 
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
-        vertices *= 9
+        vertices *= 6
 
         return vertices
 
@@ -271,6 +271,8 @@ class FlameReplacePointsBlenderTrainer(BlenderTrainer):
             ray_origin=rays_o,
             points=pts
         )
+
+        z_vals, _ = torch.sort(z_vals, -1)
 
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 

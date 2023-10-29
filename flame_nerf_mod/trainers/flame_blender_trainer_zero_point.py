@@ -1,13 +1,20 @@
-"""Promienie przebijają mesha, tam gdzie nie przebiją alpha = 0. Mesh się nie rusza"""
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 from tqdm import trange
 import numpy as np
+import os
+import imageio
+from tqdm import tqdm
 from nerf_pytorch.run_nerf_helpers import (
     img2mse,
-    mse2psnr
+    mse2psnr,
+    to8b
 )
+from nerf_pytorch.nerf_utils import (
+    render_path
+)
+
 from nerf_pytorch.nerf_utils import render
 from nerf_pytorch.utils import load_obj_from_config
 
@@ -21,7 +28,7 @@ from flame_nerf_mod.mesh_utils import (
 )
 
 
-class FlameBlenderTrainerPointZero(BlenderTrainer):
+class FlameBlenderTrainerExtraPoints(BlenderTrainer):
     """Trainer for Flame blender data."""
     def __init__(
             self,
@@ -60,8 +67,7 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
 
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
-        vertices *= 9
-        vertices[:, 1] = vertices[:, 1]
+        vertices *= 6
 
         return vertices
 
@@ -166,11 +172,6 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
         """
         ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
 
-        mask = torch.ones_like(raw)
-        mask[ray_idxs_intersection_mash] = 0
-
-        raw[mask.bool()] = 0
-
         raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
         dists = z_vals[..., 1:] - z_vals[..., :-1]
@@ -194,10 +195,8 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
 
         alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
 
-        #mask_alpha = torch.ones_like(alpha)
-        #mask_alpha[ray_idxs_intersection_mash] = 0
-
-        #alpha[mask_alpha.bool()] = 0
+        if self.global_step - self.global_step//1000 * 1000 == 0:
+            torch.save(alpha, f'{self.global_step}_alpha.pt')
 
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:,
                           :-1]
@@ -232,13 +231,8 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
         lindisp
     ):
 
-        vertices = self.flame_vertices()
-        ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
-            faces=self.faces,
-            vertices=vertices,
-            ray_origins=rays_o,
-            ray_directions=rays_d,
-        )
+        if self.global_step > 10:
+            N_samples = 30
 
         t_vals = torch.linspace(0., 1., steps=N_samples)
         if not lindisp:
@@ -267,9 +261,41 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
         # [N_rays, N_samples, 3]
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
-        mask = torch.ones_like(pts)
-        mask[ray_idxs_intersection_mash] = 0
-        pts[mask.bool()] = 0
+        ray_idxs_intersection_mash = None
+
+        if self.global_step > 10:
+
+            vertices = self.flame_vertices()
+            ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
+                faces=self.faces,
+                vertices=vertices,
+                ray_origins=rays_o,
+                ray_directions=rays_d,
+            )
+
+            extra_pts, distance = sample_extra_points_on_mesh(
+                points=pts_mesh.squeeze(dim=1),
+                ray_directions=rays_d,
+                n_points=N_samples,
+                eps=0.02,
+            )
+
+            pts[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
+
+            z_vals = transform_points_to_single_number_representation(
+                ray_directions=rays_d,
+                ray_origin=rays_o,
+                points=pts
+            )
+
+            z_vals, _ = torch.sort(z_vals, -1)
+
+            pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
+
+            if self.global_step - self.global_step // 1000 * 1000 == 0:
+                torch.save(pts, f'{self.global_step}_pts.pt')
+                torch.save(pts_mesh, f'{self.global_step}_pts_mesh.pt')
+                torch.save(extra_pts, f'{self.global_step}_extra_pts.pt')
 
         # [N_rays, N_samples, n_chanels]
         raw = network_query_fn(pts, viewdirs, network_fn)
@@ -312,5 +338,76 @@ class FlameBlenderTrainerPointZero(BlenderTrainer):
 
         loss.backward()
         optimizer.step()
+        self.f_opt.step()
 
         return trans, loss, psnr, psnr0
+
+
+    def rest_is_logging(
+        self, i, render_poses, hwf, poses, i_test, images,
+        loss, psnr, render_kwargs_train,
+        render_kwargs_test, optimizer
+    ):
+        if i % self.i_weights == 0:
+            path = os.path.join(self.basedir, self.expname, '{:06d}.tar'.format(i))
+            data = {
+                'global_step': self.global_step,
+                'network_fn_state_dict': render_kwargs_train['network_fn'].state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }
+            if render_kwargs_train['network_fine'] is not None:
+                data['network_fine_state_dict'] = render_kwargs_train['network_fine'].state_dict()
+            torch.save(data, path)
+            print('Saved checkpoints at', path)
+
+        if i % self.i_video == 0 and i > 0:
+            # Turn on testing mode
+            with torch.no_grad():
+                rgbs, disps = render_path(render_poses, hwf, self.K, self.chunk, render_kwargs_test)
+            print('Done, saving', rgbs.shape, disps.shape)
+            moviebase = os.path.join(self.basedir, self.expname, '{}_spiral_{:06d}_'.format(self.expname, i))
+            imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
+            imageio.mimwrite(moviebase + 'disp.mp4', to8b(disps / np.max(disps)), fps=30, quality=8)
+
+        if i % self.i_testset == 0 and i > 0:
+            testsavedir = os.path.join(self.basedir, self.expname, 'testset_f_{:06d}'.format(i))
+            os.makedirs(testsavedir, exist_ok=True)
+            with torch.no_grad():
+                vertice_out = self.flame_vertices()
+
+                outmesh_path = os.path.join(testsavedir, 'face.obj')
+                write_simple_obj(mesh_v=vertice_out.detach().cpu().numpy(), mesh_f=self.faces,
+                                 filepath=outmesh_path)
+
+                target_s = images[i_test]
+                rgbs, _ = render_path(torch.Tensor(poses[i_test]).to(self.device), hwf, self.K, self.chunk,
+                                      render_kwargs_test,
+                                      gt_imgs=target_s, savedir=testsavedir)
+
+                img_loss = img2mse(torch.Tensor(rgbs), torch.Tensor(target_s))
+                loss = img_loss
+                psnr = mse2psnr(img_loss)
+
+                self.log_on_tensorboard(
+                    i,
+                    {
+                        'test': {
+                            'loss': loss,
+                            'psnr': psnr
+                        }
+                    }
+                )
+            print('Saved test set')
+
+        if i % self.i_print == 0:
+            tqdm.write(f"[TRAIN] Iter: {i} Loss: {loss.item()}  PSNR: {psnr.item()}")
+
+
+def write_simple_obj(mesh_v, mesh_f, filepath, verbose=False):
+    with open(filepath, 'w') as fp:
+        for v in mesh_v:
+            fp.write('v %f %f %f\n' % (v[0], v[1], v[2]))
+        for f in mesh_f + 1:  # Faces are 1-based, not 0-based in obj files
+            fp.write('f %d %d %d\n' % (f[0], f[1], f[2]))
+    if verbose:
+        print('mesh saved to: ', filepath)

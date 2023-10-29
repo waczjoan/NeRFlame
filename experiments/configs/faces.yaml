@@ -5,13 +5,15 @@ default_setup_params: &default_setup_params
     far: 6.0
     N_rand: 1024
     device: 'cuda'
-    i_weights: 2500
-    i_testset: 5000
-    i_video: 50000
+    i_weights: 50000
+    i_testset: 1500
+    i_video: 100000
     i_print: 50000
     input_dims_embed: 3
     white_bkgd: True
     half_res: true
+    chunk: 1024
+    netchunk: 1024
 
 default_nerf_setup_params: &default_nerf_setup_params
     N_samples: 64
@@ -37,7 +39,7 @@ without_importance_dataset_face_M1000N_setup: &without_importance_dataset_face_M
     expname: "nerf_64_sampes_0_importance"
 
 flame_dataset_face_M1000N_setup: &flame_dataset_face_M1000N_setup
-    expname: "flame_nerf_face_not_move_0_raw_if_no_intersection_mal_9"
+    expname: "flame_nerf_face_not_move_0_raw_if_no_intersection_mal_9_minus_2"
 
 flame_extra_dataset_face_M1000N_setup: &flame_extra_dataset_face_M1000N_setup
     expname: "flame_nerf_face_not_move_extra_points_if_intersection_mal_9"
@@ -65,6 +67,17 @@ face_M1000N_without_importance_module:
     <<: *dataset_face_M1000N_setup
     <<: *without_importance_dataset_face_M1000N_setup
 
+face_M1000N_extra_points:
+  module: "flame_nerf_mod.trainers.FlameBlenderTrainerExtraPoints"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    expname: "flame_nerf_extra_points_move_after_10_change_to_extra_30_sample_mal_6"
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
 
 face_M1000N_default_module_flame:
   module: "flame_nerf_mod.trainers.FlameBlenderTrainer"

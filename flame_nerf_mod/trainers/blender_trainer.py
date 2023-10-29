@@ -102,8 +102,9 @@ class BlenderTrainer(Trainer):
         # [N_rays, N_samples, 3]
         pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
 
-        if self.global_step == 500:
-            torch.save(pts, '500_pts.pt')
+        if self.global_step - self.global_step//1000 * 1000 == 0:
+            torch.save(pts, f'{self.global_step}_pts.pt')
+
 
         # [N_rays, N_samples, n_chanels]
         raw = network_query_fn(pts, viewdirs, network_fn)
@@ -163,8 +164,9 @@ class BlenderTrainer(Trainer):
                 noise = torch.Tensor(noise)
 
         alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-        if self.global_step == 500:
-            torch.save(alpha, '500_alpha.pt')
+
+        if self.global_step - self.global_step//1000 * 1000 == 0:
+            torch.save(alpha, f'{self.global_step}_alpha.pt')
 
         weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:,
                           :-1]

@@ -61,7 +61,7 @@ class FlameBlenderTrainer(BlenderTrainer):
         vertices = vertices[:, [0, 2, 1]]
         vertices[:, 1] = -vertices[:, 1]
         vertices *= 9
-        vertices[:, 1] = vertices[:, 1]
+        vertices[:, 1] = vertices[:, 1] - 2
 
         return vertices
 
@@ -313,5 +313,6 @@ class FlameBlenderTrainer(BlenderTrainer):
 
         loss.backward()
         optimizer.step()
+        #self.f_opt.step()
 
         return trans, loss, psnr, psnr0
