@@ -237,13 +237,17 @@ class FLAME(nn.Module):
             lmk_faces_idx = torch.cat([dyn_lmk_faces_idx, lmk_faces_idx], 1)
             lmk_bary_coords = torch.cat(
                 [dyn_lmk_bary_coords, lmk_bary_coords], 1)
-
         landmarks = vertices2landmarks(vertices, self.faces_tensor,
                                              lmk_faces_idx,
                                              lmk_bary_coords)
 
+
         if self.use_3D_translation:
             landmarks += transl.unsqueeze(dim=1)
             vertices += transl.unsqueeze(dim=1)
+
+        torch.save(landmarks, 'landmarks.pt')
+        torch.save(vertices, 'vertices.pt')
+        torch.save(self.faces_tensor, 'faces.pt')
 
         return vertices, landmarks

@@ -277,12 +277,12 @@ def sample_extra_points_on_mesh(
     )  # Unit vector (vector) of e => ê
 
     # Define your epsilon tensor (n, m)
-    epsilons = torch.normal(
-        mean=0,
-        std=torch.ones(ray_directions_norm.shape[0], n_points) * eps
-    )
+    #epsilons = torch.normal(
+    #    mean=0,
+    #    std=torch.ones(ray_directions_norm.shape[0], n_points) * eps
+    #)
 
-    # epsilons = torch.rand(ray_directions_norm.shape[0], n_points) * 2 * eps - eps
+    epsilons = torch.rand(ray_directions_norm.shape[0], n_points) * 2 * eps - eps
 
     # Expand dimensions to match the target shape (n, m, 3)
     ray_directions_norm = ray_directions_norm.unsqueeze(1)

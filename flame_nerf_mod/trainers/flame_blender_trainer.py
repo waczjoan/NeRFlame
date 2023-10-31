@@ -229,7 +229,8 @@ class FlameBlenderTrainer(BlenderTrainer):
         raw_noise_std,
         white_bkgd,
         pytest,
-        lindisp
+        lindisp,
+        **kwargs,
     ):
 
         vertices = self.flame_vertices()

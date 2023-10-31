@@ -73,7 +73,7 @@ face_M1000N_extra_points:
     <<: *default_setup_params
     <<: *without_importance_nerf_setup_params
     <<: *dataset_face_M1000N_setup
-    expname: "flame_nerf_extra_points_move_after_10_change_to_extra_128_sample_vertices_mal_start_8_f_lr_0_001_eps_lin_max_1_alpha_plus_f_trans_0__only_ray_init_rand"
+    expname: "only_intersection"
     config:
      module: "FLAME.FlameConfig"
      kwargs:
