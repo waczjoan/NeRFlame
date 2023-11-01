@@ -306,3 +306,23 @@ def transform_points_to_single_number_representation(
     result = (points - torch.unsqueeze(ray_origin, 1)) \
              / torch.unsqueeze(ray_directions, 1)
     return torch.nanmean(result, dim=2)
+
+
+def calc_distance(pts_mesh, pts):
+    # Reshape 'pts' to have an extra dimension for broadcasting
+    pts_mesh = pts_mesh.view(pts_mesh.shape[0], 1, 1, 3)
+    # Calculate the squared Euclidean distance
+    sq_distance = torch.sum((pts_mesh - pts)**2, dim=-1)  # Sum along the last dimension
+    # Take the square root to get the Euclidean distance
+    distance = torch.sqrt(sq_distance) # [n_points_on_mesh, n_rays, n_samples]
+    return distance
+
+
+def select_points_with_distance_eps(pts, distance, eps = 0.2):
+    shape = distance.shape
+    min_distance = torch.min(distance, dim = 0).values
+    idx_ray, idx_point = torch.where(min_distance < eps)
+    mask = torch.zeros_like(min_distance)
+    mask[idx_ray, idx_point] = 1
+    mask = mask.view(shape[1], shape[2], 1)
+    return pts * mask, min_distance, mask

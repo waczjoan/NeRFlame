@@ -6,7 +6,7 @@ default_setup_params: &default_setup_params
     N_rand: 1024
     device: 'cuda'
     i_weights: 50000
-    i_testset: 300
+    i_testset: 5000
     i_video: 100000
     i_print: 50000
     input_dims_embed: 3
@@ -73,7 +73,7 @@ face_M1000N_extra_points:
     <<: *default_setup_params
     <<: *without_importance_nerf_setup_params
     <<: *dataset_face_M1000N_setup
-    expname: "only_intersection"
+    expname: "eps_everywhere_mask_always_mal_8_slower_eps_lr_0_001v_vertices_mal"
     config:
      module: "FLAME.FlameConfig"
      kwargs:
@@ -134,6 +134,18 @@ face_M1000N_default_module_flame_not_move_replace_0_point:
     <<: *without_importance_10_sample_nerf_setup_params
     <<: *dataset_face_M1000N_setup
     expname: "flame_nerf_face_not_move_0_point_if_no_intersection"
+    config:
+     module: "FLAME.FlameConfig"
+     kwargs:
+       <<: *default_flame_setup_params
+
+face_M1000N_flame_nerf:
+  module: "flame_nerf_mod.trainers.FlameBlenderTrainerWJ"
+  kwargs:
+    <<: *default_setup_params
+    <<: *without_importance_nerf_setup_params
+    <<: *dataset_face_M1000N_setup
+    expname: "flame_nerf"
     config:
      module: "FLAME.FlameConfig"
      kwargs:

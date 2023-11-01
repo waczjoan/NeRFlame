@@ -24,7 +24,8 @@ from flame_nerf_mod.mesh_utils import (
     intersection_points_on_mesh,
     sample_extra_points_on_mesh,
     transform_points_to_single_number_representation,
-
+    calc_distance,
+    select_points_with_distance_eps
 )
 
 
@@ -42,8 +43,8 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         self.model_flame = FLAME(flame_config).to(self.device)
         torch.save(self.model_flame, 'model_flame.pt')
 
-        self.f_shape = nn.Parameter(torch.rand(1, 100).float().to(self.device)/100)
-        self.f_exp = nn.Parameter(torch.rand(1, 50).float().to(self.device))
+        self.f_shape = nn.Parameter(torch.zeros(1, 100).float().to(self.device)/100)
+        self.f_exp = nn.Parameter(torch.zeros(1, 50).float().to(self.device))
         self.f_pose = nn.Parameter(torch.zeros(1, 6).float().to(self.device))
         self.f_neck_pose = nn.Parameter(torch.zeros(1, 3).float().to(self.device))
         self.f_trans = nn.Parameter(torch.zeros(1, 3).float().to(self.device))
@@ -116,7 +117,7 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         print('VAL views are', i_val)
 
         start = self.start + 1
-        N_iters = 2000
+        N_iters = 20000
         for i in trange(start, N_iters):
             rays_rgb, i_batch, batch_rays, target_s = self.sample_random_ray_batch(
                 rays_rgb,
@@ -207,9 +208,11 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
                 noise = torch.Tensor(noise)
 
         alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-        ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
+        #ray_idxs_intersection_mash = kwargs["ray_idxs_intersection_mash"]
 
-        if self.global_step > 0:
+        alpha = alpha * kwargs['distance']
+
+        """if self.global_step > 0:
             distance = kwargs["distance"].abs()
             mask = distance < self.eps/2
             _mask = mask # [ray_idxs_intersection_mash]
@@ -226,7 +229,8 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
                         }
                     }
                 )
-
+        
+        """
         if self.global_step - self.global_step//1000 * 1000 == 0:
             torch.save(alpha, f'{self.global_step}_alpha.pt')
 
@@ -264,8 +268,7 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         **kwargs
     ):
 
-        if self.global_step > 0:
-            N_samples = 128
+        N_samples = 128
 
         t_vals = torch.linspace(0., 1., steps=N_samples)
         if not lindisp:
@@ -297,72 +300,78 @@ class FlameBlenderTrainerExtraPoints(BlenderTrainer):
         ray_idxs_intersection_mash = None
         distance = None
 
-        if self.global_step > 0:
+        vertices = self.flame_vertices()
+        ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
+            faces=self.faces,
+            vertices=vertices,
+            ray_origins=rays_o,
+            ray_directions=rays_d,
+        )
 
-            vertices = self.flame_vertices()
-            ray_idxs_intersection_mash, pts_mesh, pts_diff_sum = intersection_points_on_mesh(
-                faces=self.faces,
-                vertices=vertices,
-                ray_origins=rays_o,
-                ray_directions=rays_d,
-            )
-
-            self.eps = 2 - self.global_step * 0.001
-            if self.eps < 0.04:
-                self.eps = 0.04
-            # self.eps = 0.02 + torch.sin(torch.pi*100 + torch.tensor(torch.pi/200 * self.global_step)).abs()
-            if self.tensorboard_logging:
-                self.log_on_tensorboard(
-                    self.global_step,
-                    {
-                        'train': {
-                            'eps': self.eps,
-                        }
+        self.eps = 1 - self.global_step * 0.0001
+        if self.eps < 0.04:
+            self.eps = 0.04
+        # self.eps = 0.02 + torch.sin(torch.pi*100 + torch.tensor(torch.pi/200 * self.global_step)).abs()
+        if self.tensorboard_logging:
+            self.log_on_tensorboard(
+                self.global_step,
+                {
+                    'train': {
+                        'eps': self.eps,
                     }
-                )
-
-            extra_pts, distance = sample_extra_points_on_mesh(
-                points=pts_mesh.squeeze(dim=1),
-                ray_directions=rays_d,
-                n_points=N_samples,
-                eps=self.eps,
+                }
             )
 
-            pts[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
+        extra_pts, distance = sample_extra_points_on_mesh(
+            points=pts_mesh.squeeze(dim=1),
+            ray_directions=rays_d,
+            n_points=N_samples,
+            eps=self.eps,
+        )
 
-            z_vals = transform_points_to_single_number_representation(
-                ray_directions=rays_d,
-                ray_origin=rays_o,
-                points=pts
-            )
+        #torch.save(pts, 'pts.pt')
+        #torch.save(pts_mesh.squeeze(dim=1), 'pts_mesh.pt')
+        #torch.save(extra_pts, 'extra_pts.pt')
 
-            z_vals, z_vals_idx = torch.sort(z_vals, -1)
-            idxs = torch.arange(z_vals.shape[0]).reshape(-1, 1) * torch.ones_like(z_vals)
-            distance = distance[idxs.long(), z_vals_idx]
+        pts[ray_idxs_intersection_mash] = extra_pts[ray_idxs_intersection_mash]
 
-            pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
-            pts += self.f_trans
+        distance = calc_distance(
+            pts_mesh,
+            pts,
+        )
 
-            if self.global_step - self.global_step // 1000 * 1000 == 0:
-                torch.save(pts, f'{self.global_step}_pts.pt')
-                torch.save(pts_mesh, f'{self.global_step}_pts_mesh.pt')
-                torch.save(extra_pts, f'{self.global_step}_extra_pts.pt')
+        transformed_pts, min_distance, mask = select_points_with_distance_eps(
+            pts,
+            distance,
+            eps=self.eps/2
+        )
+        # torch.save(transformed_pts, 'transformed_pts.pt')
 
-            #pts=pts[ray_idxs_intersection_mash]
-            #viewdirs = viewdirs[ray_idxs_intersection_mash]
-            #distance = distance[ray_idxs_intersection_mash]
-            #z_vals = z_vals[ray_idxs_intersection_mash]
-            #rays_d = rays_d[ray_idxs_intersection_mash]
+        z_vals = transform_points_to_single_number_representation(
+            ray_directions=rays_d,
+            ray_origin=rays_o,
+            points=pts
+        )
 
+        z_vals, z_vals_idx = torch.sort(z_vals, -1)
+        # idxs = torch.arange(z_vals.shape[0]).reshape(-1, 1) * torch.ones_like(z_vals)
+        # distance = distance[idxs.long(), z_vals_idx]
 
-        # [N_rays, N_samples, n_chanels]
+        pts = rays_o[..., None, :] + rays_d[..., None, :] * z_vals[..., :, None]
+        pts += self.f_trans
+
+        if self.global_step - self.global_step // 1000 * 1000 == 0:
+            torch.save(pts, f'{self.global_step}_pts.pt')
+            torch.save(pts_mesh, f'{self.global_step}_pts_mesh.pt')
+            torch.save(extra_pts, f'{self.global_step}_extra_pts.pt')
+
         raw = network_query_fn(pts, viewdirs, network_fn)
         rgb_map, disp_map, acc_map, weights, depth_map = self.raw2outputs(
             raw=raw,
             z_vals=z_vals,
             rays_d=rays_d,
             ray_idxs_intersection_mash=ray_idxs_intersection_mash,
-            distance=distance,
+            distance=mask[:,:,-1],
             raw_noise_std=raw_noise_std,
             white_bkgd=white_bkgd,
             pytest=pytest
