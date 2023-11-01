@@ -246,7 +246,7 @@ def create_nerf(args):
     if args.use_viewdirs:
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args.i_embed)
     # output_ch = 5 if args.N_importance > 0 else 4
-    output_ch = 3
+    output_ch = 4
     skips = [4]
     model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -327,7 +327,7 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer, model
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
+def raw2outputs(raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std=0, white_bkgd=False, pytest=False, alpha_overide=None,
                 fake_alpha=None):
     """Transforms model's predictions to semantically meaningful values.
     Args:
@@ -362,13 +362,16 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
             noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
+    _alpha = raw2alpha(raw[..., 3] + noise, dists)
     if alpha_overide is None:
-        alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
-    else:
-        alpha = alpha_overide
+        alpha = _alpha  # [N_rays, N_samples]
+    else:  # [N_rays, N_samples]
+        alpha = FLAME_based_alpha_calculator_original(distances_f, epsilon, _alpha)
 
     if fake_alpha is None:
         fake_alpha = alpha
+    else:
+        fake_alpha = FLAME_based_alpha_calculator_original(distances_f, fake_epsilon, _alpha)
 
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:, :-1]
@@ -385,6 +388,7 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         rgb_map = rgb_map + (1. - acc_map[..., None])
 
     return rgb_map, disp_map, acc_map, weights, fake_weights, depth_map
+
 
 
 # PointFaceDistance
@@ -745,10 +749,6 @@ def render_rays(f_vert,
 
     distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
 
-    m = torch.nn.ReLU()
-    alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
-    fake_alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, fake_epsilon)
-
     if offset is not None:
         pts += offset
 
@@ -758,10 +758,12 @@ def render_rays(f_vert,
 
     raw = network_query_fn(pts, viewdirs, network_fn)
 
-    rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
-                                                                               white_bkgd,
-                                                                               pytest=pytest, alpha_overide=alpha,
-                                                                               fake_alpha=fake_alpha)
+    rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
+    raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
+       white_bkgd,
+       pytest=pytest, alpha_overide=True,
+       fake_alpha=True
+    )
 
     if N_importance > 0:
         rgb_map_0, disp_map_0, acc_map_0 = rgb_map, disp_map, acc_map
@@ -775,7 +777,6 @@ def render_rays(f_vert,
                                                             None]  # [N_rays, N_samples + N_importance, 3]
 
         distances_f, idx_f = FLAME_based_alpha_calculator_3_face_version(pts, f_vert, f_faces)
-        alpha = FLAME_based_alpha_calculator_f_relu(distances_f, m, epsilon)
 
         run_fn = network_fn if network_fine is None else network_fine
 
@@ -789,9 +790,10 @@ def render_rays(f_vert,
         # raw = run_network(pts, fn=run_fn)
         raw = network_query_fn(pts, viewdirs, run_fn)
 
-        rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(raw, z_vals, rays_d, raw_noise_std,
-                                                                                   white_bkgd,
-                                                                                   pytest=pytest, alpha_overide=alpha)
+        rgb_map, disp_map, acc_map, weights, fake_weights, depth_map = raw2outputs(
+            raw, z_vals, rays_d, distances_f, epsilon, fake_epsilon, raw_noise_std,
+            white_bkgd,
+            pytest=pytest, alpha_overide=True)
 
     ret = {'rgb_map': rgb_map, 'disp_map': disp_map, 'acc_map': acc_map}
     if retraw:
