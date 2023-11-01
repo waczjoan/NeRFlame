@@ -246,8 +246,4 @@ class FLAME(nn.Module):
             landmarks += transl.unsqueeze(dim=1)
             vertices += transl.unsqueeze(dim=1)
 
-        torch.save(landmarks, 'landmarks.pt')
-        torch.save(vertices, 'vertices.pt')
-        torch.save(self.faces_tensor, 'faces.pt')
-
         return vertices, landmarks
